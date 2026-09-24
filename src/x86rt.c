@@ -21,8 +21,8 @@ cpu *x86_new(void)
     return c;
 }
 
-/* guest jmp_buf address -> the host jmp_buf the recompiled setjmp uses */
-struct x86_jbtab { unsigned n; struct { uint32_t guest; jmp_buf *host; } e[512]; };
+/* guest jmp_buf address -> host jmp_buf: an open-addressing hash that grows (a long text sets many) */
+struct x86_jbtab { unsigned n, cap; struct jbent { uint32_t guest; jmp_buf *host; } *e; };
 
 void x86_free(cpu *c)
 {
@@ -30,7 +30,8 @@ void x86_free(cpu *c)
     for (uint32_t i = 0; i < NPAGES; i++) free(c->pages[i]);
     free(c->pages);
     if (c->jb) {
-        for (unsigned i = 0; i < c->jb->n; i++) free(c->jb->e[i].host);
+        for (unsigned i = 0; i < c->jb->cap; i++) free(c->jb->e[i].host);
+        free(c->jb->e);
         free(c->jb);
     }
     free(c->crt_files);
@@ -322,12 +323,29 @@ jmp_buf *x86_jmpbuf(cpu *c, uint32_t guest_buf)
 {
     struct x86_jbtab *t = c->jb;
     if (!t && !(t = c->jb = (struct x86_jbtab *)calloc(1, sizeof *t))) abort();
-    for (unsigned i = 0; i < t->n; i++)
-        if (t->e[i].guest == guest_buf) return t->e[i].host;
-    if (t->n == 512) x86_fail(c, guest_buf, "too many jmp_bufs");
-    t->e[t->n].guest = guest_buf;
-    if (!(t->e[t->n].host = (jmp_buf *)malloc(sizeof(jmp_buf)))) abort();
-    return t->e[t->n++].host;
+    if (2 * (t->n + 1) > t->cap) {                 /* keep it at most half full */
+        unsigned cap = t->cap ? 2 * t->cap : 256;
+        struct jbent *e = (struct jbent *)calloc(cap, sizeof *e);
+        if (!e) abort();
+        for (unsigned i = 0; i < t->cap; i++)
+            if (t->e[i].host) {
+                unsigned k = (t->e[i].guest * 2654435761u) & (cap - 1);
+                while (e[k].host) k = (k + 1) & (cap - 1);
+                e[k] = t->e[i];
+            }
+        free(t->e);
+        t->e = e;
+        t->cap = cap;
+    }
+    unsigned k = (guest_buf * 2654435761u) & (t->cap - 1);
+    while (t->e[k].host) {
+        if (t->e[k].guest == guest_buf) return t->e[k].host;
+        k = (k + 1) & (t->cap - 1);
+    }
+    t->e[k].guest = guest_buf;
+    if (!(t->e[k].host = (jmp_buf *)malloc(sizeof(jmp_buf)))) abort();
+    t->n++;
+    return t->e[k].host;
 }
 
 void x86_icall(cpu *c, uint32_t target)

@@ -5,9 +5,9 @@ with the engine's data compiled in: a drop-in `ECI.DLL` for x86 and x64 that nee
 files.
 
 **Status of the port.** Hand-written C: the formant synthesizer (`src/klatt.c`, the voice itself;
-bit-exact on 19,902 recorded frames, `klatt_check`), the ECI API (`src/eci.c`), the runtime and maths.
-Still recompiled from the machine code: the front end (text rules, pronunciation, prosody, the frame
-builder) - these are replaced by hand-written C one function at a time (`x2c --replace`), each checked
+bit-exact on 19,902 recorded frames, `klatt_check`), the frame builder that feeds it (`src/framer.c`,
+parameter tracks to 5 ms frames), the ECI API (`src/eci.c`), the runtime and maths.
+Still recompiled from the machine code: the front end (text rules, pronunciation, prosody) - these are replaced by hand-written C one function at a time (`x2c --replace`), each checked
 against the recompiled one.
 
 The engine is recompiled from its machine code (`tools/x2c.py`: every x86 instruction becomes C on a
