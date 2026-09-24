@@ -1,0 +1,8 @@
+new
+param 5 0
+buffer 4096
+add Eight kilohertz.
+synth
+sync
+getparam 5
+delete

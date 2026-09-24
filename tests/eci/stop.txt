@@ -1,0 +1,9 @@
+new
+buffer 2000
+add This sentence is going to be interrupted before it can finish, because we call stop right away.
+synth
+stop
+add After the stop.
+synth
+sync
+delete

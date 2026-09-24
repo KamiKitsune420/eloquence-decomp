@@ -1,0 +1,11 @@
+new
+buffer 4096
+add Line one\nline two \nline three.
+add Tabs\tand | pipes ^ carets \ backslashes ` backticks.
+synth
+sync
+param 1 1
+add Annotated `gi `ui \` \ and `vv100 loud `vv92 back.
+synth
+sync
+delete

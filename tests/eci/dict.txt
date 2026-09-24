@@ -1,0 +1,22 @@
+new
+buffer 4096
+newdict
+updatedict 0 NVDA=en vee dee ay
+updatedict 0 Eloq=elo kwence
+updatedict 1 GUI=gooey
+lookup 0 NVDA
+lookup 0 nothere
+lookup 1 GUI
+listdict 0
+listdict 1
+setdict 1
+add NVDA uses Eloq with a GUI.
+synth
+sync
+updatedict 0 Eloq
+lookup 0 Eloq
+setdict 0
+add NVDA uses Eloq with a GUI.
+synth
+sync
+delete

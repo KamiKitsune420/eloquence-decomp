@@ -1,0 +1,12 @@
+new
+buffer 4096
+add One two three.
+index 1
+add Four five six.
+index 2
+add Seven.
+index 3
+synth
+sync
+getindex
+delete

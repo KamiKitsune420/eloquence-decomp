@@ -1,0 +1,26 @@
+new
+buffer 4096
+param 8 1
+getvparam 0 2
+getvparam 0 6
+getvparam 0 7
+getvparam 3 2
+vparam 0 2 200
+vparam 0 6 300
+vparam 0 7 5000
+getvparam 0 2
+getvparam 0 6
+getvparam 0 7
+param 8 0
+getvparam 0 2
+getvparam 0 6
+getvparam 0 7
+add Real world units.
+synth
+sync
+param 8 1
+param 1 1
+add `vs250 `vb150 annotated `vv1000 units.
+synth
+sync
+delete

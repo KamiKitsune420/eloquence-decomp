@@ -1,0 +1,7 @@
+new
+buffer 4096
+param 1 1
+add `vs90 Fast speech `vs50 normal `vb80 higher `pp0 no pause.
+synth
+sync
+delete

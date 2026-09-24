@@ -1,0 +1,15 @@
+new
+buffer 3000
+param 0 1
+add First part,
+index 10
+vparam 0 6 90
+add then faster.
+index 11
+getvparam 0 6
+synth
+sync
+add Normal mode again?
+synth
+sync
+delete

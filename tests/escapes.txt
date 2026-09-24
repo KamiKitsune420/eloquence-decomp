@@ -1,0 +1,10 @@
+a | b | c
+2^10 is 1024
+C:\Windows\System32\drivers
+back\\slash and back\`tick
+`vv50 is not an annotation here
+the `gi and `ui cases
+‘curly’ quotes and “double” ones
+tab	separated	words
+^|`\ all four together
+x^y|z`w\v

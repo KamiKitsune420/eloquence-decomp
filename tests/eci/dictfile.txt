@@ -1,0 +1,23 @@
+new
+buffer 4096
+newdict
+updatedict 0 Zyx=zix
+updatedict 0 Qwe=kway
+updatedict 0 Plo=plow
+updatedict 1 ABC=alphabet
+savedict 0 eci_test_main.dic
+savedict 1 eci_test_root.dic
+deletedict
+newdict
+loaddict 0 eci_test_main.dic
+loaddict 1 eci_test_root.dic
+loaddict 2 eci_test_does_not_exist.dic
+listdict 0
+listdict 1
+loaddict 0 eci_test_main.dic
+listdict 0
+setdict 1
+add Zyx and Qwe and Plo know ABC.
+synth
+sync
+delete

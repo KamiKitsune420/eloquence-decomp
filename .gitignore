@@ -1,0 +1,23 @@
+# Eloquence itself is not in this repository: bring your own copy (README.md).
+pkg/
+# generated from pkg/ENU.SYN: the recompiled engine code and its data
+src/gen/
+# Ghidra's output and projects contain the vendor's code
+decomp/
+ghidra/*.gpr
+ghidra/*.rep/
+# build products, renders, scratch
+build/
+out/
+*.wav
+*.frm
+*.dic
+*.obj
+*.exe
+*.dll
+*.pdb
+*.ilk
+*.exp
+*.lib
+__pycache__/
+src/gen_synth.c

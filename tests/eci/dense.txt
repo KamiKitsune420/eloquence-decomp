@@ -1,0 +1,16 @@
+new
+buffer 512
+index 1
+add a
+index 2
+add b c d
+index 3
+index 4
+add The quick brown fox jumps over the lazy dog.
+index 5
+add Another sentence here! And a question?
+index 6
+synth
+sync
+getindex
+delete

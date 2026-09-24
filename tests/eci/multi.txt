@@ -1,0 +1,13 @@
+new
+buffer 2048
+add First utterance.
+synth
+sync
+add Second one, a little longer than the first.
+synth
+sync
+add Third
+add  continues here.
+synth
+sync
+delete

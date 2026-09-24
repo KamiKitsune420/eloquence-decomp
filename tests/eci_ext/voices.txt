@@ -1,0 +1,29 @@
+new
+buffer 4096
+getvparam 17 2
+getvparam 19 4
+copy 17 0
+add Hello, I am Robo, now inside the E C I D L L.
+synth
+sync
+copy 18 0
+add And this is the Newsreader voice.
+synth
+sync
+copy 19 0
+add Vintage Reed here. I sound like an old computer.
+synth
+sync
+copy 20 0
+add Robo with vibrato.
+synth
+sync
+copy 21 0
+add Newsreader with vibrato.
+synth
+sync
+copy 1 0
+add And back to plain Reed, with no effects at all.
+synth
+sync
+delete

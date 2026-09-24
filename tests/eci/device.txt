@@ -1,0 +1,9 @@
+new
+add Played on the default sound device.
+index 9
+add The index fires when the audio gets there.
+synth
+sync
+getindex
+speaking
+delete

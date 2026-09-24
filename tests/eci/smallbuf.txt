@@ -1,0 +1,8 @@
+new
+buffer 100
+add Small buffers, many callbacks.
+index 7
+add End.
+synth
+sync
+delete

@@ -1,0 +1,8 @@
+version
+new
+buffer 4096
+add Hello from Eloquence.
+synth
+sync
+speaking
+delete

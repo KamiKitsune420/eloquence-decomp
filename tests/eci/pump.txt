@@ -1,0 +1,10 @@
+new
+buffer 2048
+add Delivered through the window procedure.
+index 5
+add Like a screen reader's thread.
+synth
+pump 3000
+speaking
+sync
+delete

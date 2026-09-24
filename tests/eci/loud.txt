@@ -1,0 +1,8 @@
+new
+buffer 4096
+vparam 0 7 100
+vparam 0 1 0
+add Shouting at the top of the voice! AAAH!
+synth
+sync
+delete

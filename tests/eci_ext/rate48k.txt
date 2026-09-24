@@ -1,0 +1,15 @@
+new
+param 5 4
+buffer 4096
+getparam 5
+add Forty eight thousand samples a second, from the formant synthesizer itself.
+index 1
+add And an index in the middle.
+synth
+sync
+getindex
+param 5 1
+add Back to eleven kilohertz.
+synth
+sync
+delete

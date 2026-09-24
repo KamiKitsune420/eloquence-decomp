@@ -1,0 +1,7 @@
+new
+buffer 4096
+param 7 1
+add Mouth shapes.
+synth
+sync
+delete

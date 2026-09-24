@@ -1,0 +1,7 @@
+new
+buffer 1000
+cbret wave notprocessed 2
+add Refuse the first two buffers.
+synth
+sync
+delete

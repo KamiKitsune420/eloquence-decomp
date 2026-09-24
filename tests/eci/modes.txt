@@ -1,0 +1,25 @@
+new
+buffer 4096
+param 2 1
+add 123 ABC.
+synth
+sync
+param 2 2
+add 123 ABC.
+synth
+sync
+param 2 3
+add Hello, world.
+synth
+sync
+param 2 0
+param 10 0
+add 1995 and 3.14.
+synth
+sync
+param 11 0
+param 3 1
+add Mr. Smith lives on St. James St.
+synth
+sync
+delete

@@ -1,0 +1,28 @@
+new
+buffer 4096
+getparam 0
+getparam 1
+getparam 2
+getparam 3
+getparam 5
+getparam 7
+getvparam 0 0
+getvparam 0 6
+getvparam 0 7
+getvparam 1 6
+vparam 0 6 80
+getvparam 0 6
+add Speed eighty.
+synth
+sync
+vparam 0 2 40
+vparam 0 7 100
+add Lower pitch, louder.
+synth
+sync
+copy 2 0
+getvparam 0 0
+add Now voice two.
+synth
+sync
+delete

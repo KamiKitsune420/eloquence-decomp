@@ -1,0 +1,11 @@
+new
+outfile eci_test_out.wav
+add Written to a file.
+index 3
+add Second part.
+synth
+sync
+add And a second utterance.
+synth
+sync
+delete
