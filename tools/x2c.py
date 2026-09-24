@@ -803,7 +803,11 @@ def main():
     ap.add_argument("--replace", nargs="*", default=[],
                     help="functions ported by hand: the recompiled one becomes f_XXXXXXXX_recomp, the hand port "
                          "defines f_XXXXXXXX")
+    ap.add_argument("--replace-list", default=None,
+                    help="a file of PORTED(XXXXXXXX, flags) lines (src/ported.h): added to --replace")
     a = ap.parse_args()
+    if a.replace_list:
+        a.replace += re.findall(r"(?m)^PORTED\(([0-9a-fA-F]{8})", open(a.replace_list).read())
     img = Image(a.image)
     tr = Translator(img, ghidra_entries(a.image))
     tr.hooks = {int(h, 16) for h in a.hook}

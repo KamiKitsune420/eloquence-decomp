@@ -5,6 +5,7 @@
 #include <stdlib.h>
 
 void (*x86_on_enter)(cpu *c, uint32_t fn);
+void (*x86_longjmp_hook)(cpu *c, uint32_t guest_buf);
 
 cpu *x86_new(void)
 {
@@ -53,6 +54,9 @@ void x86_write(cpu *c, uint32_t a, const void *src, uint32_t n)
     const uint8_t *s = (const uint8_t *)src;
     while (n) {
         uint32_t room = PAGE_SIZE - (a & (PAGE_SIZE - 1)), k = n < room ? n : room;
+#ifdef X86_WTRACK
+        for (uint32_t b = a; b < a + k; b = (b | ((1u << WT_BITS) - 1)) + 1) WT(c, b, 1);
+#endif
         memcpy(MP(c, a), s, k);
         a += k; s += k; n -= k;
     }

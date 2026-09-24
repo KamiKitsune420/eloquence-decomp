@@ -6,7 +6,7 @@
  * own code: it is called on the machine, with the state written back first since it reads the samples
  * there.
  */
-#include "x86rt.h"
+#include "port.h"
 #include "klatt.h"
 
 #include <string.h>
@@ -59,7 +59,7 @@ static uint8_t output(void *user, uint32_t cookie, void *samples, int32_t count)
     return (uint8_t)r;
 }
 
-void f_1013caf0(cpu *c)
+PORT_FN(1013caf0)
 {
     if (x86_on_enter) x86_on_enter(c, SYNTH_ADDR);  /* frame dumps and voice effects see it first */
     static THREAD_LOCAL uint8_t state[STATE_SIZE];

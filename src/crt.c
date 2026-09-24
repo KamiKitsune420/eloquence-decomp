@@ -412,6 +412,7 @@ void imp_longjmp(cpu *c)
     c->esp = rd32(c, b + 16);
     wr32(c, c->fs_base, rd32(c, b + 24));
     c->eax = v ? v : 1;
+    if (x86_longjmp_hook) x86_longjmp_hook(c, b);
     longjmp(*x86_jmpbuf(c, b), 1);
 }
 

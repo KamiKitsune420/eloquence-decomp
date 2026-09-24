@@ -9,19 +9,16 @@
  * argument too.
  */
 #include "framer.h"
+#include "port.h"
 
 /* the frame builder's stack frame: 0x128 bytes of locals and four saved registers below the return
  * address, the frame buffer (62 floats) at the top of the locals */
 #define FRAME_BYTES 0x138u
 #define FRAME_BUF   0xf8u        /* below the return address */
 
-static void ret(cpu *c, uint32_t eax, uint32_t pop)
-{
-    c->eax = eax;
-    c->esp += 4 + pop;
-}
+#define ret port_ret
 
-void f_101306b0(cpu *c)
+PORT_FN(101306b0)
 {
     uint32_t entry = c->esp;
     /* the frame lives where the original has it, so that the 64 floats the synthesizer is given end with
@@ -33,7 +30,7 @@ void f_101306b0(cpu *c)
 }
 
 /* bool FUN_1012f8a0(eng, short track, uint *time, int *value) */
-void f_1012f8a0(cpu *c)
+PORT_FN(1012f8a0)
 {
     uint32_t eng = rd32(c, c->esp + 4), time_p = rd32(c, c->esp + 12), value_p = rd32(c, c->esp + 16);
     int16_t track = (int16_t)rd16(c, c->esp + 8);
@@ -49,25 +46,25 @@ void f_1012f8a0(cpu *c)
 }
 
 /* int FUN_1012f960(eng, short track): time of the track's last queued breakpoint */
-void f_1012f960(cpu *c)
+PORT_FN(1012f960)
 {
     ret(c, framer_track_end(c, rd32(c, c->esp + 4), (int16_t)rd16(c, c->esp + 8)), 0);
 }
 
 /* int FUN_1012f980(eng): number of tracks */
-void f_1012f980(cpu *c)
+PORT_FN(1012f980)
 {
     ret(c, (uint32_t)framer_track_count(c, rd32(c, c->esp + 4)), 0);
 }
 
 /* bool __fastcall FUN_10130bd0(queue) */
-void f_10130bd0(cpu *c)
+PORT_FN(10130bd0)
 {
     ret(c, (uint32_t)framer_queue_empty(c, c->ecx), 0);
 }
 
 /* bool __thiscall FUN_10130c60(queue, uint *entry) */
-void f_10130c60(cpu *c)
+PORT_FN(10130c60)
 {
     uint32_t out = rd32(c, c->esp + 4), q = c->ecx, e;
     uint32_t buf = rd32(c, q), head = rd16(c, q + 6);
@@ -78,13 +75,13 @@ void f_10130c60(cpu *c)
 }
 
 /* bool __fastcall FUN_10130d40(queue) */
-void f_10130d40(cpu *c)
+PORT_FN(10130d40)
 {
     ret(c, (uint32_t)framer_queue_shrink(c, c->ecx), 0);
 }
 
 /* bool FUN_10142350(eng): stop requested */
-void f_10142350(cpu *c)
+PORT_FN(10142350)
 {
     uint32_t eng = rd32(c, c->esp + 4);
     c->ecx = rd32(c, eng + 0x68);

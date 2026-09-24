@@ -45,10 +45,28 @@ struct cpu {
     uint32_t crt_vars[8];
     void *crt_files;                 /* crt.c: the open files (guest FILE * -> host) */
     struct x86_jbtab *jb;
+    /* write tracking, used by the differential tester (src/difftest.c) in builds with X86_WTRACK: a
+     * write to block b (WT_BITS-byte blocks) with wt_stamp[b] != wt_gen calls x86_wtrack first. NULL: off */
+    uint32_t *wt_stamp;
+    uint32_t wt_gen;
 };
 
 /* ---------------------------------------------------------------- memory */
 uint8_t *x86_page(cpu *c, uint32_t addr);                  /* creates the page if missing */
+
+#define WT_BITS 8
+#ifdef X86_WTRACK
+void x86_wtrack(cpu *c, uint32_t a);                       /* src/difftest.c: log the block's old content */
+static inline void WT(cpu *c, uint32_t a, uint32_t n)
+{
+    if (c->wt_stamp) {
+        if (c->wt_stamp[a >> WT_BITS] != c->wt_gen) x86_wtrack(c, a);
+        if (c->wt_stamp[(a + n - 1) >> WT_BITS] != c->wt_gen) x86_wtrack(c, a + n - 1);
+    }
+}
+#else
+#define WT(c, a, n) ((void)0)
+#endif
 
 static inline uint8_t *MP(cpu *c, uint32_t a)
 {
@@ -58,7 +76,7 @@ static inline uint8_t *MP(cpu *c, uint32_t a)
 }
 
 static inline uint8_t rd8(cpu *c, uint32_t a) { return *MP(c, a); }
-static inline void wr8(cpu *c, uint32_t a, uint8_t v) { *MP(c, a) = v; }
+static inline void wr8(cpu *c, uint32_t a, uint8_t v) { WT(c, a, 1); *MP(c, a) = v; }
 static inline uint16_t rd16(cpu *c, uint32_t a)
 {
     if ((a & (PAGE_SIZE - 1)) <= PAGE_SIZE - 2) { uint16_t v; memcpy(&v, MP(c, a), 2); return v; }
@@ -72,13 +90,13 @@ static inline uint32_t rd32(cpu *c, uint32_t a)
 static inline uint64_t rd64(cpu *c, uint32_t a) { return (uint64_t)rd32(c, a) | ((uint64_t)rd32(c, a + 4) << 32); }
 static inline void wr16(cpu *c, uint32_t a, uint16_t v)
 {
-    if ((a & (PAGE_SIZE - 1)) <= PAGE_SIZE - 2) { memcpy(MP(c, a), &v, 2); return; }
+    if ((a & (PAGE_SIZE - 1)) <= PAGE_SIZE - 2) { WT(c, a, 2); memcpy(MP(c, a), &v, 2); return; }
     wr8(c, a, (uint8_t)v);
     wr8(c, a + 1, (uint8_t)(v >> 8));
 }
 static inline void wr32(cpu *c, uint32_t a, uint32_t v)
 {
-    if ((a & (PAGE_SIZE - 1)) <= PAGE_SIZE - 4) { memcpy(MP(c, a), &v, 4); return; }
+    if ((a & (PAGE_SIZE - 1)) <= PAGE_SIZE - 4) { WT(c, a, 4); memcpy(MP(c, a), &v, 4); return; }
     wr16(c, a, (uint16_t)v);
     wr16(c, a + 2, (uint16_t)(v >> 16));
 }
@@ -237,6 +255,9 @@ jmp_buf *x86_jmpbuf(cpu *c, uint32_t guest_buf);
 
 /* debugging: functions recompiled with --hook call this first (NULL: nothing) */
 extern void (*x86_on_enter)(cpu *c, uint32_t fn);
+/* the differential tester: crt's longjmp calls this with the guest jmp_buf once the registers are
+ * restored, before the host longjmp (NULL: nothing) */
+extern void (*x86_longjmp_hook)(cpu *c, uint32_t guest_buf);
 
 cpu *x86_new(void);
 void x86_free(cpu *c);

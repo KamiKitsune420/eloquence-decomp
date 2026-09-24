@@ -6,9 +6,11 @@ files.
 
 **Status of the port.** Hand-written C: the formant synthesizer (`src/klatt.c`, the voice itself;
 bit-exact on 19,902 recorded frames, `klatt_check`), the frame builder that feeds it (`src/framer.c`,
-parameter tracks to 5 ms frames), the ECI API (`src/eci.c`), the runtime and maths.
-Still recompiled from the machine code: the front end (text rules, pronunciation, prosody) - these are replaced by hand-written C one function at a time (`x2c --replace`), each checked
-against the recompiled one.
+parameter tracks to 5 ms frames), the Delta rule runtime (`src/rules*.c`, 212 functions: the streams,
+sync marks, pattern matching and backtracking the rules run on), the ECI API (`src/eci.c`), the runtime and maths.
+Still recompiled from the machine code: the compiled Delta rule modules themselves (text normalization,
+pronunciation, stress, intonation, durations) - these are replaced by hand-written C one function at a time (`x2c --replace`), each checked
+against the recompiled one by `src/difftest.c` (snapshot the machine, run both, compare everything).
 
 The engine is recompiled from its machine code (`tools/x2c.py`: every x86 instruction becomes C on a
 software x86 with an exact 80-bit x87), the API layer is written by hand from the original's

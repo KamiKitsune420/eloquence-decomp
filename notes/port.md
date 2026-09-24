@@ -145,6 +145,32 @@ rate: same duration and pitch, levels within a couple of dB, content up to Nyqui
 voice's energy above 5.5 kHz is ~37 dB down). ECI extension: eciSampleRate 2/3/4 = 22050/44100/48000
 (0/1 as the original; the engine is told `esr1). x86 and x64 give identical 48 kHz output.
 
+### Hand ports in place of recompiled functions, and the differential tester
+
+A hand port replaces a recompiled function by address: src/ported.h lists them (`PORTED(addr, flags)`),
+tools/x2c.py `--replace-list src/ported.h` renames the recompiled one to f_ADDR_recomp, and the port
+defines f_ADDR through PORT_FN (src/port.h: cdecl arguments with ARG(n), port_ret). Ports work in guest
+memory and call other engine functions through the machine at the esp the original has (a callee's
+frame, arguments written into argument slots, and the stack garbage it reads are then the same).
+
+- the synthesizer (klatt.c) and frame builder (framer.c), with adapters klatt_guest.c / framer_guest.c
+- the rule runtime (0x10130e80-0x10136000 and its helpers up to 0x1013a000): rules.c, rules_ops.c,
+  rules_delta.c, rules_pool.c, rules_edit.c, rules_io.c (adapters in rules_guest.c or at the file's end),
+  tracks.c; the data structures (streams, elements, sync marks, values, refs, control stack, workspace)
+  are documented in src/rules.h
+
+**src/difftest.c** (`python tools/build_engine.py x64 difftest`, run by `python tools/difftest.py
+[--quick] [--only addr,...]`): every call of a ported function runs the recompiled original on a snapshot
+of the machine first, records the result, takes its writes back (guest memory writes are tracked in
+256-byte blocks, a build with X86_WTRACK), runs the port, and compares eax (per its flags: all / al /
+none; edx for 64-bit results), ebx esi edi ebp esp, the x87 state, the heap, and the memory either one
+wrote at or above the entry esp (below it is the callee's scratch). Nested ported calls are compared at
+every level; host state (audio, voice effects, maths counters) is snapshotted too; a longjmp out of a
+call is caught (x86_longjmp_hook) and compared as well. DIFFTEST=all|none|addr,addr (default all),
+DIFFTEST_VERBOSE=n (mismatches printed in full). tools/retuse.py justifies the eax flags (what the callers read), tools/argwrites.py
+finds functions that write their argument slots, tools/regress.py runs the whole e2e + eci_compare
+regression in parallel.
+
 ## Plan
 
 1. ~~Run the whole recompiled engine and compare with ecisay~~ done; more: long texts, several utterances
