@@ -184,6 +184,7 @@ class Translator:
         self.md.detail = True
         self.known = set(known_entries)       # function starts (Ghidra's list)
         self.hooks = set()                    # functions that report their entry (x86_on_enter)
+        self.replaced = set()                 # functions a hand port provides: emitted as f_XXXXXXXX_recomp
         self.thunks = {}                      # thunk address -> import name
         self.used_imports = set()
         self.fns = {}
@@ -310,7 +311,8 @@ class Translator:
             if i + 1 >= len(addrs) or addrs[i + 1] != nxt:
                 need_goto[a] = nxt
                 fn.targets.add(nxt)
-        out = ["static void f_%08x(cpu *c)" % fn.entry, "{"]
+        name = "f_%08x_recomp" % fn.entry if fn.entry in self.replaced else "f_%08x" % fn.entry
+        out = ["static void %s(cpu *c)" % name, "{"]
         if fn.entry in self.hooks:
             out.append("    if (x86_on_enter) x86_on_enter(c, 0x%xu);" % fn.entry)
         for a in addrs:
@@ -798,10 +800,14 @@ def main():
     ap.add_argument("-o", "--out", default=os.path.join(ROOT, "src", "gen_x86.c"))
     ap.add_argument("--split", type=int, default=1, help="write the functions into this many .c files")
     ap.add_argument("--hook", nargs="*", default=[], help="functions that call x86_on_enter(c, addr) first")
+    ap.add_argument("--replace", nargs="*", default=[],
+                    help="functions ported by hand: the recompiled one becomes f_XXXXXXXX_recomp, the hand port "
+                         "defines f_XXXXXXXX")
     a = ap.parse_args()
     img = Image(a.image)
     tr = Translator(img, ghidra_entries(a.image))
     tr.hooks = {int(h, 16) for h in a.hook}
+    tr.replaced = {int(h, 16) for h in a.replace}
     tr.run([int(e, 16) for e in a.entries], a.tree)
     tr.output(a.out, a.split)
 

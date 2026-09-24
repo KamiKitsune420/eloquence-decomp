@@ -4,6 +4,12 @@ ETI Eloquence 6.1.0.2 (`ECI.DLL` + `ENU.SYN`, US English), rebuilt as C that pro
 with the engine's data compiled in: a drop-in `ECI.DLL` for x86 and x64 that needs no `.syn` or `.ini`
 files.
 
+**Status of the port.** Hand-written C: the formant synthesizer (`src/klatt.c`, the voice itself;
+bit-exact on 19,902 recorded frames, `klatt_check`), the ECI API (`src/eci.c`), the runtime and maths.
+Still recompiled from the machine code: the front end (text rules, pronunciation, prosody, the frame
+builder) - these are replaced by hand-written C one function at a time (`x2c --replace`), each checked
+against the recompiled one.
+
 The engine is recompiled from its machine code (`tools/x2c.py`: every x86 instruction becomes C on a
 software x86 with an exact 80-bit x87), the API layer is written by hand from the original's
 decompilation (`notes/eci_api.md`). Everything is checked sample for sample against the real DLL.

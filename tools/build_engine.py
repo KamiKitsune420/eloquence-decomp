@@ -32,11 +32,12 @@ def main():
     cmds = []
     if stale:
         cmds.append("cl %s /I. /MP4 /c /Fo..\\build\\%s\\enu\\ %s" % (cf, arch, " ".join(stale)))
-    cmds.append("cl %s %s /Fo..\\build\\%s\\ x86rt.c fx80.c x87math.c crt.c image.c eloq_run.c ..\\build\\%s\\enu\\*.obj "
+    # klatt.c: the synthesizer, ported by hand (klatt_guest.c puts it where FUN_1013caf0 was)
+    cmds.append("cl %s %s /Fo..\\build\\%s\\ x86rt.c fx80.c x87math.c crt.c image.c klatt.c klatt_guest.c eloq_run.c ..\\build\\%s\\enu\\*.obj "
                 "/Fe:..\\build\\%s\\eloq_run.exe" % (cf, "/DELOQ_EMBEDDED" if embedded else "", arch, arch, arch))
     if embedded:
         # the ECI API as a drop-in ECI.DLL (the engine inside, no data files), and the script driver
-        cmds.append("cl %s /Oy- /DELOQ_EMBEDDED /LD /Fo..\\build\\%s\\ eci.c eci_text.c voicefx.c engine.c x86rt.c fx80.c "
+        cmds.append("cl %s /Oy- /DELOQ_EMBEDDED /LD /Fo..\\build\\%s\\ eci.c eci_text.c voicefx.c engine.c klatt.c klatt_guest.c x86rt.c fx80.c "
                     "x87math.c crt.c image.c ..\\build\\%s\\enu\\*.obj /Fe:..\\build\\%s\\ECI.DLL "
                     "/link /DEF:eci.def winmm.lib user32.lib" % (cf, arch, arch, arch))
         cmds.append("cl %s /Fo..\\build\\%s\\ ..\\harness\\ecitrace.c user32.lib /Fe:..\\build\\%s\\ecitrace.exe" % (cf, arch, arch))
