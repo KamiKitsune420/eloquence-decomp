@@ -354,18 +354,36 @@ uint32_t rl_insert_token(cpu *c, uint32_t sp, uint32_t eng, uint32_t s, uint32_t
 uint32_t rl_reset_stream(cpu *c, uint32_t sp, uint32_t eng, uint32_t s)
 {
     uint32_t d = stream_desc((uint32_t)(int32_t)(int8_t)s);
-    rl_delete_range(c, AT(sp - 0x14, 4), eng, s, rd32(c, WS(eng) + WS_END), rd32(c, WS(eng) + WS_START));
-    if (!rd8(c, d + SD_HAS_DEFAULT)) return 1;
-    uint32_t ref = sp - 8;
-    uint32_t fd = rd32(c, d + SD_FIELDS);
-    wr16(c, ref + 4, rd16(c, fd + FD_TYPE));
-    uint8_t flag = rd8(c, fd + FD_FLAG);
-    uint32_t def = rd32(c, d + SD_DEFAULT);
-    uint32_t get0 = rd32(c, rd32(c, d + SD_GETTERS));
-    wr8(c, ref + 6, flag);
-    wr32(c, ref, icall1(c, sp - 0x14, get0, 0x10135cceu, def));
-    uint32_t ws = WS(eng);
-    return rl_insert_token(c, AT(sp - 0x18, 5), eng, s, rd32(c, ws + WS_END), rd32(c, ws + WS_START), ref, 0);
+    /* through the machine as the original: ebx s, edi eng, esi 19 s */
+    uint32_t ebx = c->ebx, esi = c->esi, edi = c->edi, r = 1;
+    c->ebx = s;
+    c->edi = eng;
+    c->esi = (uint32_t)(int32_t)(int8_t)s * 19;
+    uint32_t args[4] = { eng, s, rd32(c, WS(eng) + WS_END), rd32(c, WS(eng) + WS_START) };
+    c->eax = args[2];
+    c->edx = args[3];
+    call_at(c, sp - 0x14, f_10136a20, 0x10135c98u, 4, args);
+    if (rd8(c, d + SD_HAS_DEFAULT)) {
+        uint32_t ref = sp - 8;
+        uint32_t fd = rd32(c, d + SD_FIELDS);
+        wr16(c, ref + 4, rd16(c, fd + FD_TYPE));
+        uint8_t flag = rd8(c, fd + FD_FLAG);
+        uint32_t def = rd32(c, d + SD_DEFAULT);
+        uint32_t getters = rd32(c, d + SD_GETTERS), get0 = rd32(c, getters);
+        wr8(c, ref + 6, flag);
+        c->ecx = def;
+        c->eax = getters;
+        wr32(c, ref, icall1(c, sp - 0x14, get0, 0x10135cceu, def));
+        uint32_t ws = WS(eng);
+        uint32_t args5[5] = { eng, s, rd32(c, ws + WS_END), rd32(c, ws + WS_START), ref };
+        c->ecx = args5[3];
+        c->edx = args5[2];
+        r = (call_at(c, sp - 0x14, f_10136570, 0x10135ce8u, 5, args5) & 0xff) ? 1 : 0;
+    }
+    c->ebx = ebx;
+    c->esi = esi;
+    c->edi = edi;
+    return r;
 }
 
 /* ------------------------------------------------------------------------ set-up and tear-down */

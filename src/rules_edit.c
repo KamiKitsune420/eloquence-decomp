@@ -67,7 +67,10 @@ uint32_t ring_check_mark(cpu *c, uint32_t sp, uint32_t eng, uint32_t m, uint32_t
  * slot (sp + 12). */
 uint32_t ring_insert_mark(cpu *c, uint32_t sp, uint32_t eng, uint32_t s, uint32_t right, uint32_t left)
 {
+    uint32_t edi = c->edi;                  /* the original keeps eng in edi */
+    c->edi = eng;
     uint32_t m = call_at(c, sp - 0x10, f_10138ce0, 0x1013672eu, 1, &eng);
+    c->edi = edi;
     if (!m) return 0;
     uint32_t si = s & 0xff;
     uint32_t a = m + 4 * (rd32(c, RS(eng) + RS_BACK) + si);
@@ -324,11 +327,23 @@ uint32_t ring_unbound(cpu *c, uint32_t sp, uint32_t eng, uint32_t m, uint32_t s)
         wr32(c, WS(eng) + WS_RUN(1) + RUN_FIRST, m);
         wr8(c, WS(eng) + WS_RUN(1) + RUN_DIR, 0xff);
     }
+    /* the original's registers from here: esi eng, ebp r, ebx the backward-link index with its low byte
+     * 0xff, edi the work space if fl2 was set (else still m); in the last loop ebx the direction, edi the
+     * element, ebp the run */
+    uint32_t ebx = c->ebx, esi = c->esi, edi = c->edi, ebp = c->ebp;
+    c->esi = eng;
+    c->ebp = r;
+    /* ebx: m - r once the loop over the streams below s ran, else the backward-link index; then or bl, 0xff */
+    c->ebx = ((int32_t)rd32(c, sml) > 0 ? m - r : rd32(c, RS(eng) + RS_BACK)) | 0xffu;
+    c->edi = rd32(c, fl2) ? WS(eng) : m;
+#define RU_RETURN(v) do { c->ebx = ebx; c->esi = esi; c->edi = edi; c->ebp = ebp; return (v); } while (0)
     ws = WS(eng);
+    c->eax = ws + WS_RUN(0);
     if (rd8(c, ws + WS_RUN(0))) call2(c, sp - 0x24, f_10137360, 0x1013722fu, eng, ws + WS_RUN(0));
     ws = WS(eng);
     uint8_t d1 = rd8(c, ws + WS_RUN(1));
     if (d1 == 0xff || d1 == 1) {
+        c->edx = ws + WS_RUN(1);
         call2(c, sp - 0x24, f_10137360, 0x101372d6u, eng, ws + WS_RUN(1));
     } else if (d1 == 2) {
         if (rd32(c, ws + WS_RUN(0) + RUN_FIRST) == r && rd8(c, ws + WS_RUN(0)) == 0xff) {
@@ -341,10 +356,13 @@ uint32_t ring_unbound(cpu *c, uint32_t sp, uint32_t eng, uint32_t m, uint32_t s)
         } else {
             wr32(c, ws + WS_RUN(2) + RUN_FIRST, r);
             wr8(c, WS(eng) + WS_RUN(2), 0xff);
+            c->ecx = WS(eng) + WS_RUN(2);
             call2(c, sp - 0x24, f_10137360, 0x10137292u, eng, WS(eng) + WS_RUN(2));
         }
         wr8(c, WS(eng) + WS_RUN(1), 1);
         wr32(c, WS(eng) + WS_RUN(1) + RUN_FIRST, rd32(c, sp + 4));
+        c->ecx = rd32(c, sp + 4);
+        c->edx = WS(eng) + WS_RUN(1);
         call2(c, sp - 0x24, f_10137360, 0x101372b3u, eng, WS(eng) + WS_RUN(1));
         ws = WS(eng);
         wr32(c, ws + WS_RUN(1) + RUN_FIRST, rd32(c, ws + WS_RUN(2) + RUN_LAST));
@@ -356,15 +374,21 @@ uint32_t ring_unbound(cpu *c, uint32_t sp, uint32_t eng, uint32_t m, uint32_t s)
     uint32_t run = ws + WS_RUN(k);
     int8_t dir = (int8_t)rd8(c, run);
     uint32_t e = rd32(c, run + RUN_FIRST);
+    c->ebx = (uint32_t)(int32_t)dir;
+    c->ebp = run;
     for (;;) {
         wr32(c, e + 8, rd32(c, e + 8) | 2);
         if (rd32(c, RS(eng) + RS_REPORT) && !(rd8(c, e + 4) & 1)) {
             uint32_t args[4] = { eng, e, rd32(c, sp + 12), 0x10192ef0u };
-            if (!(call_at(c, sp - 0x24, f_10136680, 0x10137325u, 4, args) & 0xff)) return 0;
+            c->edi = e;
+            c->ecx = rd32(c, sp + 12);
+            c->edx = rd32(c, e + 8);
+            if (!(call_at(c, sp - 0x24, f_10136680, 0x10137325u, 4, args) & 0xff)) RU_RETURN(0);
         }
-        if (e == rd32(c, run + RUN_LAST)) return 1;
+        if (e == rd32(c, run + RUN_LAST)) RU_RETURN(1);
         e = dir >= 0 ? rd32(c, e + 4 * rd32(c, RS(eng) + RS_BACK) - 8) & ~3u : rd32(c, e + 4) & ~3u;
     }
+#undef RU_RETURN
 }
 
 /* FUN_10136e00: delete the elements of stream s (ws+0x46) from `from` leftwards to `to`: tokens freed,
@@ -471,6 +495,13 @@ uint32_t unmark(cpu *c, uint32_t sp, uint32_t eng, uint32_t s, uint32_t m, uint3
     wr32(c, ws + 0x42, e);
     uint32_t si = s & 0xff;
     if (!(rd8(c, m + 4 * (si + rd32(c, RS(eng) + RS_BACK))) & 1)) return 1;
+    /* the original's registers from here: esi eng, ebx m, edi s & 0xff, ebp 19 s (the new link after
+     * the merge) */
+    uint32_t ebx = c->ebx, esi = c->esi, edi = c->edi, ebp = c->ebp;
+    c->esi = eng;
+    c->ebx = m;
+    c->edi = si;
+    c->ebp = si * 19;
     uint32_t nx = rd32(c, m + 0xc + 4 * si) & ~3u;
     uint32_t pv = rd32(c, m + 4 * (si + rd32(c, RS(eng) + RS_BACK))) & ~3u;
     wr32(c, sp + 4, pv);
@@ -484,24 +515,43 @@ uint32_t unmark(cpu *c, uint32_t sp, uint32_t eng, uint32_t s, uint32_t m, uint3
         uint8_t fl = rd8(c, rd32(c, d + SD_FIELDS) + FD_FLAG);
         wr8(c, r0 + 6, fl);
         wr8(c, r1 + 6, fl);
-        uint32_t get0 = rd32(c, rd32(c, d + SD_GETTERS));
+        uint32_t getters = rd32(c, d + SD_GETTERS), get0 = rd32(c, getters);
+        c->ecx = getters;
         wr32(c, r1, icall1(c, sp - 0x20, get0, 0x10136c1au, nx + 8));
-        wr32(c, r0, icall1(c, sp - 0x24, rd32(c, rd32(c, d + SD_GETTERS)), 0x10136c2fu, rd32(c, sp + 4) + 8));
+        c->edx = getters;
+        wr32(c, r0, icall1(c, sp - 0x24, rd32(c, getters), 0x10136c2fu, rd32(c, sp + 4) + 8));
         if (rd8(c, d + 0x33)) {
+            c->ecx = r1;
+            c->edx = r0;
             call3(c, sp - 0x20, f_101385f0, 0x10136c51u, eng, r0, r1);
             uint32_t args[4] = { eng, rd32(c, sp + 8), rd32(c, r1), rd32(c, r0) };
+            c->eax = rd32(c, r0);
+            c->ecx = rd32(c, r1);
+            c->edx = rd32(c, sp + 8);
             call_at(c, sp - 0x2c, f_101364c0, 0x10136c66u, 4, args);
             uint32_t left = rd32(c, sp + 4);
             wr32(c, rd32(c, eng + ENG_OUT) + 0x1b5, 1);
             uint32_t pl = rd32(c, left + 4) & ~3u;
-            set_link(c, m + 4 * (rd32(c, RS(eng) + RS_BACK) + si), pl);
-            set_link(c, pl + 4 * si + 0xc, m);
+            uint32_t la = m + 4 * (rd32(c, RS(eng) + RS_BACK) + si), ra = pl + 4 * si + 0xc;
+            set_link(c, la, pl);
+            set_link(c, ra, m);
+            c->ebp = rd32(c, la);
+            c->ecx = rd32(c, ra);
+            c->eax = pl;
+            c->edx = left;
             call3(c, sp - 0x3c, f_10138d60, 0x10136caau, eng, left, 0);
         }
     }
     ws = WS(eng);
     uint32_t args[4] = { eng, rd32(c, ws + 0x36), rd32(c, ws + 0x3a), k4 };
+    c->ecx = args[2];
+    c->edx = args[1];
+    c->eax = ws;
     call_at(c, sp - 0x20, f_10136e00, 0x10136cc3u, 4, args);
+    c->ebx = ebx;
+    c->esi = esi;
+    c->edi = edi;
+    c->ebp = ebp;
     return 1;
 }
 

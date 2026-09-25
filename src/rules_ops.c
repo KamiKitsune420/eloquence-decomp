@@ -293,16 +293,35 @@ uint32_t rl_for_step(cpu *c, uint32_t sp, uint32_t eng, uint32_t next, uint32_t 
     wr32(c, RS(eng) + RS_FAIL, fail);
     wr32(c, RS(eng) + RS_NEXT, next);
     wr8(c, RS(eng) + RS_TRAIL, 0);
-    rl_ref_at(c, AT(sp - 0x28, 3), eng, ra, a);
-    rl_ref_at(c, AT(sp - 0x34, 3), eng, rstep, step);
-    rl_ref_at(c, AT(sp - 0x40, 3), eng, rlim, limit);
-    rl_add(c, eng, ra, rstep, 0);
-    rl_compare(c, eng, ra, rlim);
+    /* through the machine as the original: esi eng, edi a, then ebx step, ebp limit */
+    uint32_t ebx = c->ebx, esi = c->esi, edi = c->edi, ebp = c->ebp;
+    c->esi = eng;
+    c->edi = a;
+    c->edx = ra;
+    call3(c, sp - 0x28, f_10131520, 0x1013443fu, eng, ra, a);
+    c->ebx = step;
+    c->eax = rstep;
+    call3(c, sp - 0x34, f_10131520, 0x1013444fu, eng, rstep, step);
+    c->ebp = limit;
+    c->ecx = rlim;
+    call3(c, sp - 0x40, f_10131520, 0x1013445fu, eng, rlim, limit);
+    c->edx = rstep;
+    c->eax = ra;
+    call3(c, sp - 0x4c, f_101385f0, 0x1013446fu, eng, ra, rstep);
+    c->ecx = rlim;
+    c->edx = ra;
+    call3(c, sp - 0x58, f_10138920, 0x1013447fu, eng, ra, rlim);
     val_release(c, a);
     val_release(c, limit);
     val_release(c, step);
+    c->eax = rstep;
+    uint32_t neg = call2(c, sp - 0x28, f_101386e0, 0x101344b4u, eng, rstep);
+    c->ebx = ebx;
+    c->esi = esi;
+    c->edi = edi;
+    c->ebp = ebp;
     int8_t cmp = (int8_t)rd8(c, RS(eng) + RS_CMP);
-    if (rl_is_negative(c, rstep)) return cmp != -1 ? 2 : 0;
+    if (neg) return cmp != -1 ? 2 : 0;
     return cmp != 1 ? 2 : 0;
 }
 
@@ -311,14 +330,30 @@ uint32_t rl_for_done(cpu *c, uint32_t sp, uint32_t eng, uint32_t a, uint32_t lim
 {
     uint32_t ra = sp - 0x10, rlim = sp - 0x18, rstep = sp - 8;
     wr8(c, RS(eng) + RS_TRAIL, 0);
-    rl_ref_at(c, AT(sp - 0x28, 3), eng, ra, a);
-    rl_ref_at(c, AT(sp - 0x34, 3), eng, rlim, limit);
-    rl_ref_at(c, AT(sp - 0x40, 3), eng, rstep, step);
-    rl_compare(c, eng, ra, rlim);
+    /* through the machine as the original: esi eng, edi a, then ebp limit, ebx step */
+    uint32_t ebx = c->ebx, esi = c->esi, edi = c->edi, ebp = c->ebp;
+    c->esi = eng;
+    c->edi = a;
+    c->ecx = ra;
+    call3(c, sp - 0x28, f_10131520, 0x10134525u, eng, ra, a);
+    c->ebp = limit;
+    c->edx = rlim;
+    call3(c, sp - 0x34, f_10131520, 0x10134535u, eng, rlim, limit);
+    c->ebx = step;
+    c->eax = rstep;
+    call3(c, sp - 0x40, f_10131520, 0x10134545u, eng, rstep, step);
+    c->ecx = rlim;
+    c->edx = ra;
+    call3(c, sp - 0x4c, f_10138920, 0x10134555u, eng, ra, rlim);
     val_release(c, a);
     val_release(c, limit);
     val_release(c, step);
-    int neg = rl_is_negative(c, rstep);
+    c->eax = rstep;
+    int neg = call2(c, sp - 0x28, f_101386e0, 0x1013458au, eng, rstep) != 0;
+    c->ebx = ebx;
+    c->esi = esi;
+    c->edi = edi;
+    c->ebp = ebp;
     uint32_t rs = RS(eng);
     int8_t cmp = (int8_t)rd8(c, rs + RS_CMP);
     if (neg ? cmp == -1 : cmp == 1) {

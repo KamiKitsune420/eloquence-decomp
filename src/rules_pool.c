@@ -234,11 +234,13 @@ void pool_free_all(cpu *c, uint32_t sp, uint32_t eng)
 }
 
 /* FUN_10139e70: take a free snapshot of the pool's position. al 1, or 0 if none is free. */
-uint32_t pool_snapshot(cpu *c, uint32_t eng)
+uint32_t pool_snapshot(cpu *c, uint32_t sp, uint32_t eng)
 {
     uint32_t ws = WS(eng);
     for (uint32_t k = 0; k < SN_N; k++) {
         if (!rd8(c, ws + WS_SNAP + SN_FREE + SN_SIZE * k)) continue;
+        wr32(c, sp - 0xc, c->ebp);          /* push ebp, push edi when one is found */
+        wr32(c, sp - 0x10, c->edi);
         uint32_t o = SN_SIZE * k;
         wr8(c, ws + WS_SNAP + SN_FREE + o, 0);
         ws = WS(eng);
@@ -328,8 +330,13 @@ uint32_t cstack_init(cpu *c, uint32_t sp, uint32_t eng, uint32_t size)
 /* ------------------------------------------------------------------------ the delta's ends */
 
 /* a new sync mark (FUN_10138ce0 inline): zeroed, flagged a mark, ring flags set */
-static uint32_t mark_new(cpu *c, uint32_t sp, uint32_t eng, uint32_t ret_alloc, uint32_t ret_set, uint32_t ret_clear)
+static uint32_t mark_new(cpu *c, uint32_t sp, uint32_t eng, uint32_t ret_alloc, uint32_t ret_set, uint32_t ret_clear,
+                         int mirror)
 {
+    /* mirror: the original's registers as FUN_10138ce0 has them (edi eng at the allocation, then esi the
+     * mark and edi its end, where the clearing left it) */
+    uint32_t esi = c->esi, edi = c->edi;
+    if (mirror) c->edi = eng;
     uint32_t save = c->esp;
     c->esp = sp;
     c->ecx = eng;
@@ -338,20 +345,33 @@ static uint32_t mark_new(cpu *c, uint32_t sp, uint32_t eng, uint32_t ret_alloc, 
     f_10139b80(c);
     c->esp = save;
     uint32_t m = c->eax;
-    if (!m) return 0;
+    if (!m) {
+        c->esi = esi;
+        c->edi = edi;
+        return 0;
+    }
     uint32_t n = rd32(c, WS(eng) + WS_MARK_SIZE);
     for (uint32_t i = 0; i + 4 <= n; i += 4) wr32(c, m + i, 0);
     for (uint32_t i = n & ~3u; i < n; i++) wr8(c, m + i, 0);
     wr32(c, m, rd32(c, m) | 2);
+    if (mirror) {
+        c->esi = m;
+        c->edi = m + n;
+        c->eax = rd32(c, m);
+        c->ecx = 0;
+        c->edx = n;
+    }
     call_at(c, sp, f_10135ae0, ret_set, 1, &m);
     call_at(c, sp - 4, f_10135b10, ret_clear, 1, &m);
+    c->esi = esi;
+    c->edi = edi;
     return m;
 }
 
 /* FUN_10138ce0 */
 uint32_t delta_mark_new(cpu *c, uint32_t sp, uint32_t eng)
 {
-    return mark_new(c, sp - 8, eng, 0x10138cf6u, 0x10138d26u, 0x10138d2cu);
+    return mark_new(c, sp - 8, eng, 0x10138cf6u, 0x10138d26u, 0x10138d2cu, 1);
 }
 
 /* link the two end marks in every stream (the counter in the original's first argument slot's low
@@ -415,9 +435,9 @@ uint32_t delta_init(cpu *c, uint32_t sp, uint32_t eng, uint32_t defaults)
 {
     wr32(c, WS(eng) + WS_MARK_SIZE, 8u * rd8(c, eng + ENG_NSTREAMS) + 0x18);
     call_at(c, sp - 0x10, f_10139cf0, 0x10138d96u, 1, &eng);
-    uint32_t m = mark_new(c, sp - 0x10, eng, 0x10138da9u, 0x10138ddeu, 0x10138de4u);
+    uint32_t m = mark_new(c, sp - 0x10, eng, 0x10138da9u, 0x10138ddeu, 0x10138de4u, 0);
     wr32(c, WS(eng) + WS_END, m);
-    m = mark_new(c, sp - 0x10, eng, 0x10138dfcu, 0x10138e2fu, 0x10138e35u);
+    m = mark_new(c, sp - 0x10, eng, 0x10138dfcu, 0x10138e2fu, 0x10138e35u, 0);
     wr32(c, WS(eng) + WS_START, m);
     if (!rd32(c, WS(eng) + WS_END) || !rd32(c, WS(eng) + WS_START)) return 0;
     if (!(call_at(c, sp - 0x10, f_10139e70, 0x10138e58u, 1, &eng) & 0xff)) return 0;
@@ -461,7 +481,7 @@ PORT_FN(10138d40)
 PORT_FN(10138d60) { RET(pool_free(c, SP, ARG(0), ARG(1))); }
 PORT_FN(10139cf0) { pool_reset(c, SP, ARG(0)); RET(c->eax); }
 PORT_FN(1013a1a0) { pool_free_all(c, SP, ARG(0)); RET(c->eax); }
-PORT_FN(10139e70) { RET(pool_snapshot(c, ARG(0))); }
+PORT_FN(10139e70) { RET(pool_snapshot(c, SP, ARG(0))); }
 PORT_FN(10139d80) { pool_rollback(c, SP, ARG(0), ARG(1), (uint8_t)ARG(2)); RET(c->eax); }
 PORT_FN(10139f10) { RET(pool_index(c, ARG(0), ARG(1), ARG(2))); }
 PORT_FN(10139f90) { RET(cstack_init(c, SP, ARG(0), ARG(1))); }

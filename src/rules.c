@@ -902,7 +902,7 @@ uint32_t rl_match_string_at(cpu *c, uint32_t sp, uint32_t eng, uint32_t s, uint3
                 wr32(c, rb, icall1(c, sp - 0x20, get0, 0x10132d89u, e + 8));
                 c->edx = rb;
                 c->eax = ra;
-                call3(c, sp - 0x20, f_10138920, 0x10132d9du, eng, ra, rb);
+                call3(c, sp - 0x24, f_10138920, 0x10132d9du, eng, ra, rb);   /* the getter's argument stays */
                 if (rd8(c, RS(eng) + RS_CMP)) { r = 1; break; }
             }
             c->ebx = next;
@@ -953,7 +953,7 @@ uint32_t rl_match_shorts_at(cpu *c, uint32_t sp, uint32_t eng, uint32_t s, uint3
             c->ebx = eng;
             c->edx = rb;
             c->eax = ra;
-            call3(c, sp - 0x20, f_10138920, 0x10132ecfu, eng, ra, rb);
+            call3(c, sp - 0x24, f_10138920, 0x10132ecfu, eng, ra, rb);   /* the getter's argument stays */
             if (rd8(c, RS(eng) + RS_CMP)) { r = 1; break; }
         }
         c->esi = p;

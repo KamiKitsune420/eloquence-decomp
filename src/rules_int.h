@@ -42,6 +42,9 @@ void f_10136a20(cpu *c);    /* rl_delete_range */
 void f_101310f0(cpu *c);    /* rl_start_at */
 void f_10135e40(cpu *c);    /* rl_step_to */
 void f_10135f70(cpu *c);    /* rl_skip_marks */
+void f_10136570(cpu *c);    /* rl_insert_token */
+void f_101385f0(cpu *c);    /* rl_add */
+void f_101386e0(cpu *c);    /* rl_is_negative */
 void f_101364c0(cpu *c);    /* rl_token_init */
 void f_10138d40(cpu *c);    /* pool_alloc for a stream's token */
 void f_101360a0(cpu *c);    /* rl_next_token */
