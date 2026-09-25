@@ -59,7 +59,7 @@ void f_1013a040(cpu *c);
 PORT_FN(101315e0) { RET((uint32_t)rl_enter(c, ARG(0), ARG(1), ARG(2), ARG(3), ARG(4), ARG(5))); }
 PORT_FN(10131790) { RET(rl_leave_at(c, c->esp, ARG(0))); }
 PORT_FN(10130e80) { rl_throw_at(c, c->esp, ARG(0)); }
-PORT_FN(101311a0) { RET((uint32_t)rl_backtrack(c, ARG(0), (int32_t)ARG(1))); }
+PORT_FN(101311a0) { RET((uint32_t)rl_backtrack_sp(c, c->esp, ARG(0), (int32_t)ARG(1))); }
 PORT_FN(10131f90) { rl_cut(c, ARG(0)); RET(c->eax); }
 PORT_FN(10131ff0) { rl_push_retry(c, ARG(0), ARG(1)); RET(c->eax); }
 PORT_FN(10132040) { uint32_t eng = ARG(0); rl_push_retry(c, eng, ARG(1)); rl_push_pos(c, eng); RET(c->eax); }

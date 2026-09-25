@@ -141,40 +141,77 @@ uint32_t rl_start_back_step(cpu *c, uint32_t sp, uint32_t eng, uint32_t next, ui
     return matched(c, eng, label, v);
 }
 
+/* FUN_10133a50 / FUN_10133bb0 through the machine: esi eng, edi v; `ret` their calls' return addresses
+ * (start, skip marks, step, skip marks); `twice`: FUN_10133a50's second skip and token */
+static uint32_t start_back_tokens(cpu *c, uint32_t sp, uint32_t eng, uint32_t next, uint32_t fail, uint32_t label,
+                                  uint32_t s, uint32_t v, const uint32_t *ret, int twice)
+{
+    uint32_t esi = c->esi, edi = c->edi, r = 0;
+    c->esi = eng;
+    c->edi = v;
+    c->eax = s & 0xff;
+    c->ecx = fail;
+    c->edx = next;
+    if (!(call5(c, sp - 8, f_101310f0, ret[0], eng, next, fail, s & 0xff, v) & 0xff)) {
+        r = 1;
+        goto out;
+    }
+    wr8(c, RS(eng) + RS_POS_BACK, 1);
+    call2(c, sp - 8, f_10135f70, ret[1], eng, 0);
+    if (!token_next(c, eng, 1)) goto out;
+    if (!(call3(c, sp - 8, f_10135d00, ret[2], eng, 1, 0) & 0xff)) goto out;
+    if (twice) {
+        call2(c, sp - 8, f_10135f70, ret[3], eng, 0);
+        if (!token_next(c, eng, 1)) goto out;
+    }
+    wr32(c, sp - 0xc, c->ebp);              /* push ebp for the matched part */
+    r = matched(c, eng, label, v);
+out:
+    c->esi = esi;
+    c->edi = edi;
+    return r;
+}
+
 /* FUN_10133a50: backward over marks, a token, marks, and another token must follow */
 uint32_t rl_start_back_token2(cpu *c, uint32_t sp, uint32_t eng, uint32_t next, uint32_t fail, uint32_t label,
                               uint32_t s, uint32_t v)
 {
-    if (!start_at(c, AT(sp - 8, 5), eng, next, fail, s & 0xff, v)) return 1;
-    wr8(c, RS(eng) + RS_POS_BACK, 1);
-    rl_skip_marks(c, eng, 0);
-    if (!token_next(c, eng, 1)) return 0;
-    if (!rl_step(c, eng, 1, 0)) return 0;
-    rl_skip_marks(c, eng, 0);
-    if (!token_next(c, eng, 1)) return 0;
-    return matched(c, eng, label, v);
+    static const uint32_t ret[4] = { 0x10133a75u, 0x10133a92u, 0x10133acdu, 0x10133ae0u };
+    return start_back_tokens(c, sp, eng, next, fail, label, s, v, ret, 1);
 }
 
 /* FUN_10133bb0: backward over marks and one token */
 uint32_t rl_start_back_token(cpu *c, uint32_t sp, uint32_t eng, uint32_t next, uint32_t fail, uint32_t label,
                              uint32_t s, uint32_t v)
 {
-    if (!start_at(c, AT(sp - 8, 5), eng, next, fail, s & 0xff, v)) return 1;
-    wr8(c, RS(eng) + RS_POS_BACK, 1);
-    rl_skip_marks(c, eng, 0);
-    if (!token_next(c, eng, 1)) return 0;
-    if (!rl_step(c, eng, 1, 0)) return 0;
-    return matched(c, eng, label, v);
+    static const uint32_t ret[4] = { 0x10133bd5u, 0x10133bf2u, 0x10133c2du, 0 };
+    return start_back_tokens(c, sp, eng, next, fail, label, s, v, ret, 0);
 }
 
 /* FUN_10133ce0 (forward) / FUN_10133fc0 (backward): one step, not onto `stop` */
 uint32_t rl_start_step(cpu *c, uint32_t sp, uint32_t eng, uint32_t next, uint32_t fail, uint32_t label, uint32_t s,
                        uint32_t v, uint32_t stop, int back)
 {
-    if (!start_at(c, AT(sp - 0xc, 5), eng, next, fail, s & 0xff, v)) return 1;
-    wr8(c, RS(eng) + RS_POS_BACK, (uint8_t)back);
-    if (!rl_step(c, eng, 1, 0) || rd32(c, RS(eng) + RS_POS_MARK) == rd32(c, stop + 2)) return 0;
-    return matched(c, eng, label, v);
+    /* through the machine as FUN_10133ce0 / FUN_10133fc0: esi eng, edi v */
+    uint32_t base = back ? 0x10133fc0u : 0x10133ce0u;
+    uint32_t esi = c->esi, edi = c->edi, r = 0;
+    c->esi = eng;
+    c->edi = v;
+    c->eax = s & 0xff;
+    c->ecx = fail;
+    c->edx = next;
+    if (!(call5(c, sp - 0xc, f_101310f0, base + 0x26, eng, next, fail, s & 0xff, v) & 0xff)) {
+        r = 1;
+    } else {
+        wr8(c, RS(eng) + RS_POS_BACK, (uint8_t)back);
+        c->eax = RS(eng);
+        if ((call3(c, sp - 0xc, f_10135d00, base + 0x45, eng, 1, 0) & 0xff)
+            && rd32(c, RS(eng) + RS_POS_MARK) != rd32(c, stop + 2))
+            r = matched(c, eng, label, v);
+    }
+    c->esi = esi;
+    c->edi = edi;
+    return r;
 }
 
 /* FUN_10133e10 (forward) / FUN_101340f0 (backward): over marks towards `stop`, a token, one step, marks
@@ -182,14 +219,38 @@ uint32_t rl_start_step(cpu *c, uint32_t sp, uint32_t eng, uint32_t next, uint32_
 uint32_t rl_start_span(cpu *c, uint32_t sp, uint32_t eng, uint32_t next, uint32_t fail, uint32_t label, uint32_t s,
                        uint32_t v, uint32_t stop, int back)
 {
-    if (!start_at(c, AT(sp - 0xc, 5), eng, next, fail, s & 0xff, v)) return 1;
+    /* the four calls' return addresses in FUN_10133e10 / FUN_101340f0; the original's registers: esi eng,
+     * ebp v, edi the stop variable (after the first call) */
+    static const uint32_t rets[2][4] = { { 0x10133e36u, 0x10133e5bu, 0x10133e9au, 0x10133ec0u },
+                                         { 0x10134116u, 0x1013413bu, 0x1013417fu, 0x101341a5u } };
+    const uint32_t *ret = rets[back ? 1 : 0];
+    uint32_t esi = c->esi, edi = c->edi, ebp = c->ebp, r = 0;
+    c->esi = eng;
+    c->ebp = v;
+    c->eax = s & 0xff;
+    c->ecx = fail;
+    c->edx = next;
+    if (!(call5(c, sp - 0xc, f_101310f0, ret[0], eng, next, fail, s & 0xff, v) & 0xff)) {
+        r = 1;
+        goto out;
+    }
+    c->edi = stop;
     wr8(c, RS(eng) + RS_POS_BACK, (uint8_t)back);
-    rl_step_to(c, eng, rd32(c, stop + 2), 0);
-    if (rd32(c, RS(eng) + RS_POS_MARK) == rd32(c, stop + 2) || !token_next(c, eng, back)) return 0;
-    if (!rl_step(c, eng, 1, 0) || rd32(c, RS(eng) + RS_POS_MARK) == rd32(c, stop + 2)) return 0;
-    rl_step_to(c, eng, rd32(c, stop + 2), 0);
-    if (rd32(c, RS(eng) + RS_POS_MARK) == rd32(c, stop + 2) || !token_next(c, eng, back)) return 0;
-    return matched(c, eng, label, v);
+    c->eax = RS(eng);
+    c->ecx = rd32(c, stop + 2);
+    call3(c, sp - 0xc, f_10135e40, ret[1], eng, rd32(c, stop + 2), 0);
+    if (rd32(c, RS(eng) + RS_POS_MARK) == rd32(c, stop + 2) || !token_next(c, eng, back)) goto out;
+    if (!(call3(c, sp - 0xc, f_10135d00, ret[2], eng, 1, 0) & 0xff)
+        || rd32(c, RS(eng) + RS_POS_MARK) == rd32(c, stop + 2)) goto out;
+    c->eax = rd32(c, stop + 2);
+    call3(c, sp - 0xc, f_10135e40, ret[3], eng, rd32(c, stop + 2), 0);
+    if (rd32(c, RS(eng) + RS_POS_MARK) == rd32(c, stop + 2) || !token_next(c, eng, back)) goto out;
+    r = matched(c, eng, label, v);
+out:
+    c->esi = esi;
+    c->edi = edi;
+    c->ebp = ebp;
+    return r;
 }
 
 /* ------------------------------------------------------------------------ conditions on values */
@@ -549,9 +610,22 @@ void rl_edit_bytes(cpu *c, uint32_t sp, uint32_t eng, uint32_t n, uint32_t bytes
 uint32_t rl_insert_list(cpu *c, uint32_t sp, uint32_t eng, uint32_t s, uint32_t n, uint32_t p, uint32_t k,
                         guest_fn insert, uint32_t base)
 {
-    if (call5(c, sp - 8, f_1013ab30, base + 0x1e, eng, SV_A(eng), SV_B(eng), s, k)) return 1;
-    call5(c, sp - 8, insert, base + 0x40, eng, s, p, n, 0);
-    return 0;
+    /* the original's registers: esi eng, edi s, and the scratch ones its pushes show */
+    uint32_t esi = c->esi, edi = c->edi, r = 1;
+    c->esi = eng;
+    c->edi = s;
+    c->eax = k;
+    c->ecx = SV_B(eng);
+    c->edx = SV_A(eng);
+    if (!call5(c, sp - 8, f_1013ab30, base + 0x1e, eng, SV_A(eng), SV_B(eng), s, k)) {
+        c->eax = n;
+        c->ecx = p;
+        call5(c, sp - 8, insert, base + 0x40, eng, s, p, n, 0);
+        r = 0;
+    }
+    c->esi = esi;
+    c->edi = edi;
+    return r;
 }
 
 /* FUN_10135010: prepare A and B; 1 if that fails, else delete the tokens between them (FUN_10136a20) */
@@ -741,10 +815,28 @@ void rl_insert_value_b(cpu *c, uint32_t sp, uint32_t eng, uint32_t s, uint32_t v
 void rl_insert_text(cpu *c, uint32_t sp, uint32_t eng, uint32_t s, uint32_t n, uint32_t p, uint32_t k,
                     int b_first, uint32_t base)
 {
+    /* the original's registers: esi eng, edi s, and the scratch ones its pushes show */
+    uint32_t esi = c->esi, edi = c->edi;
+    c->esi = eng;
+    c->edi = s;
+    c->eax = k;
+    c->ecx = b_first ? SV_A(eng) : SV_B(eng);
+    c->edx = b_first ? SV_B(eng) : SV_A(eng);
     uint32_t ok = b_first ? call5(c, sp - 8, f_1013ae40, base + 0x1e, eng, SV_B(eng), SV_A(eng), s, k)
                           : call5(c, sp - 8, f_1013af00, base + 0x1e, eng, SV_A(eng), SV_B(eng), s, k);
-    if ((ok & 0xff) && (call5(c, sp - 8, f_101430d0, base + 0x38, eng, s, p, n, 0) & 0xff)) return;
-    rl_throw_at(c, AT(sp - 8, 1), eng);
+    if (ok & 0xff) {
+        c->eax = n;
+        c->ecx = p;
+        ok = call5(c, sp - 8, f_101430d0, base + 0x38, eng, s, p, n, 0) & 0xff;
+    } else {
+        ok = 0;
+    }
+    if (!ok) {
+        uint32_t a1[1] = { eng };
+        call_at(c, sp - 8, f_10130e80, base + 0x45, 1, a1);    /* longjmps */
+    }
+    c->esi = esi;
+    c->edi = edi;
 }
 
 /* FUN_10133480: prepare A and B; n := val as an int (in the original's first argument slot, sp + 4),
@@ -770,18 +862,40 @@ uint32_t rl_edit_count(cpu *c, uint32_t sp, uint32_t eng, uint32_t s, uint32_t v
  * FUN_1013a890 first (abort if not); the int goes through the original's first argument slot */
 void rl_measure(cpu *c, uint32_t sp, uint32_t eng, uint32_t s, uint32_t var)
 {
-    if (!(call3(c, sp - 0x20, f_1013a890, 0x10135677u, eng, SV_A(eng), 0) & 0xff)
-        || !(call3(c, sp - 0x20, f_1013a890, 0x1013568au, eng, SV_B(eng), 1) & 0xff))
-        rl_throw_at(c, AT(sp - 0x20, 1), eng);
+    /* the original's registers: esi eng, ebp A's address, then ebx var and edi s */
+    uint32_t ebx = c->ebx, esi = c->esi, edi = c->edi, ebp = c->ebp;
+    c->esi = eng;
+    c->ebp = SV_A(eng);
+    int ok = call3(c, sp - 0x20, f_1013a890, 0x10135677u, eng, SV_A(eng), 0) & 0xff;
+    if (ok) {
+        c->eax = SV_B(eng);
+        ok = call3(c, sp - 0x20, f_1013a890, 0x1013568au, eng, SV_B(eng), 1) & 0xff;
+    }
+    if (!ok) {
+        uint32_t a1[1] = { eng };
+        call_at(c, sp - 0x20, f_10130e80, 0x10135697u, 1, a1);  /* longjmps */
+    }
     uint32_t vref = sp - 8, nref = sp - 0x10;
-    rl_ref_at(c, AT(sp - 0x20, 3), eng, vref, var);
+    c->ebx = var;
+    c->ecx = vref;
+    call3(c, sp - 0x20, f_10131520, 0x101356aau, eng, vref, var);
+    c->edi = s;
+    c->edx = SV_B(eng);
     uint32_t n = call4(c, sp - 0x2c, f_1013a570, 0x101356bau, eng, SV_A(eng), SV_B(eng), s);
     wr32(c, sp + 4, n);
     if (n == 0x80000001u) wr32(c, sp + 4, 0);
     wr8(c, nref + 6, rd8(c, rd32(c, stream_desc(s & 0xff) + SD_FIELDS) + FD_FLAG));
     wr16(c, nref + 4, (uint16_t)T_INT);
     wr32(c, nref, sp + 4);
-    rl_assign(c, eng, vref, nref);
+    c->edi = s & 0xff;
+    c->eax = vref;
+    c->ecx = sp + 4;
+    c->edx = nref;
+    call3(c, sp - 0x20, f_10138730, 0x1013570bu, eng, vref, nref);
+    c->ebx = ebx;
+    c->esi = esi;
+    c->edi = edi;
+    c->ebp = ebp;
     val_release(c, var);
 }
 
@@ -791,9 +905,23 @@ uint32_t rl_match_table(cpu *c, uint32_t sp, uint32_t eng, uint32_t out, int16_t
 {
     uint32_t a = SV_A(eng), b = SV_B(eng);
     if (!rd32(c, a) || !rd32(c, b)) return 1;
-    if (!(call3(c, sp - 0xc, f_1013afd0, 0x10135843u, eng, a, b) & 0xff)) rl_throw_at(c, AT(sp - 0xc, 1), eng);
+    /* the original's registers: esi eng, ebx A's address, edi B's */
+    uint32_t ebx = c->ebx, esi = c->esi, edi = c->edi;
+    c->esi = eng;
+    c->ebx = a;
+    c->edi = b;
+    if (!(call3(c, sp - 0xc, f_1013afd0, 0x10135843u, eng, a, b) & 0xff)) {
+        uint32_t a1[1] = { eng };
+        call_at(c, sp - 0xc, f_10130e80, 0x10135850u, 1, a1);   /* longjmps */
+    }
+    c->ecx = rd32(c, a);
+    c->eax = rd32(c, b);
+    c->edx = out;
     uint32_t r = call5(c, sp - 0xc, f_10143380, 0x10135876u, eng, rd32(c, a), rd32(c, b),
                        rd32(c, eng + 0x28) + 30u * (uint32_t)(int32_t)n, out);
+    c->ebx = ebx;
+    c->esi = esi;
+    c->edi = edi;
     return r ? 0 : 1;
 }
 
@@ -806,10 +934,23 @@ uint32_t rl_ab_test(cpu *c, uint32_t sp, uint32_t eng)
 /* FUN_10133170: A and B resolved (abort if not), then FUN_10137d20(eng, a, A, B, b, d, e) */
 void rl_ab_call(cpu *c, uint32_t sp, uint32_t eng, uint32_t a, uint32_t b, uint32_t d, uint32_t e)
 {
-    if (!(call3(c, sp - 0xc, f_1013afd0, 0x10133185u, eng, SV_A(eng), SV_B(eng)) & 0xff))
-        rl_throw_at(c, AT(sp - 0xc, 1), eng);
+    /* the original's registers: esi eng, ebx A's address, edi B's */
+    uint32_t ebx = c->ebx, esi = c->esi, edi = c->edi;
+    c->esi = eng;
+    c->ebx = SV_A(eng);
+    c->edi = SV_B(eng);
+    if (!(call3(c, sp - 0xc, f_1013afd0, 0x10133185u, eng, SV_A(eng), SV_B(eng)) & 0xff)) {
+        uint32_t a1[1] = { eng };
+        call_at(c, sp - 0xc, f_10130e80, 0x10133192u, 1, a1);   /* longjmps */
+    }
     uint32_t args[7] = { eng, a, rd32(c, SV_A(eng)), rd32(c, SV_B(eng)), b, d, e };
+    c->eax = rd32(c, SV_B(eng));
+    c->ecx = rd32(c, SV_A(eng));
+    c->edx = a;
     call_at(c, sp - 0xc, f_10137d20, 0x101331b5u, 7, args);
+    c->ebx = ebx;
+    c->esi = esi;
+    c->edi = edi;
 }
 
 /* FUN_10133110 / FUN_10133140: FUN_10141730(eng, FUN_101416f0(eng, a), flag), abort if 0 */
@@ -946,9 +1087,25 @@ void rl_reset_streams(cpu *c, uint32_t sp, uint32_t eng, uint32_t n, uint32_t li
 uint32_t rl_match_pattern(cpu *c, uint32_t sp, uint32_t eng, int16_t n, uint32_t out1, uint32_t out2)
 {
     uint32_t a = eng + ENG_SYNC_A, b = eng + ENG_SYNC_B;
-    if (!(call3(c, sp - 0x14, f_1013afd0, 0x10135747u, eng, a, b) & 0xff)) rl_throw_at(c, AT(sp - 0x14, 1), eng);
+    /* the original's registers at its calls: edi eng, ebx A's address, esi B's, then ebp the entry */
+    uint32_t ebx = c->ebx, esi = c->esi, edi = c->edi, ebp = c->ebp;
+    c->edi = eng;
+    c->ebx = a;
+    c->esi = b;
+    if (!(call3(c, sp - 0x14, f_1013afd0, 0x10135747u, eng, a, b) & 0xff)) {
+        uint32_t a1[1] = { eng };
+        call_at(c, sp - 0x14, f_10130e80, 0x10135754u, 1, a1);  /* longjmps */
+    }
     uint32_t entry = rd32(c, eng + 0x2c) + 34u * (uint32_t)(int32_t)n;
+    c->ebp = entry;
+    c->ecx = rd32(c, a);
+    c->eax = rd32(c, b);
+    c->edx = rd32(c, eng + 0x2c);
     uint32_t p = call4(c, sp - 0x14, f_101435d0, 0x10135776u, eng, rd32(c, a), rd32(c, b), entry);
+    c->ebx = ebx;
+    c->esi = esi;
+    c->edi = edi;
+    c->ebp = ebp;
     if (!p) return 1;
     wr16(c, RS(eng) + RS_MATCH_COUNT, rd16(c, p + 2));
     uint32_t k = 0;
@@ -1022,58 +1179,184 @@ static uint32_t item_slot(int16_t t, uint32_t sp, int shorts)
  * n = 0 delete the tokens between A and B instead. Each item is converted to the stream's field 0 type
  * (FUN_10138730) unless it has it. al 1, or 0 when an insertion fails. The original keeps the current
  * byte in its s slot (sp + 8) and p (bytes) or the end (shorts) in its p slot (sp + 12). */
-uint32_t rl_insert_items(cpu *c, uint32_t sp, uint32_t eng, uint32_t s, uint32_t p, uint32_t n, uint32_t k5,
-                         int shorts)
+/* FUN_10132730 (the byte items) as the original runs it, through the machine: ebx n (then k5), ebp s, edi s & 0xff,
+ * esi eng; the field type from FUN_10135b20 (called twice); the item converted by FUN_10138730 when the types
+ * differ */
+static uint32_t insert_bytes(cpu *c, uint32_t sp, uint32_t eng, uint32_t s, uint32_t p, uint32_t n, uint32_t k5)
 {
     uint32_t a = eng + ENG_SYNC_A, b = eng + ENG_SYNC_B;
+    uint32_t ebx = c->ebx, esi = c->esi, edi = c->edi, ebp = c->ebp, r;
+    c->ebx = n;
     if (!(n & 0xff)) {
         uint32_t args[4] = { eng, s, rd32(c, a), rd32(c, b) };
-        return (call_at(c, sp - 0x30, f_10136a20, shorts ? 0x101328c6u : 0x10132756u, 4, args) & 0xffffff00u) | 1;
+        c->eax = eng;
+        c->ecx = s;
+        c->edx = rd32(c, a);
+        r = (call_at(c, sp - 0x30, f_10136a20, 0x10132756u, 4, args) & 0xffffff00u) | 1;
+        goto out;
     }
     uint32_t si = s & 0xff;
     uint32_t tref = sp - 0x18, cref = sp - 0x10;
-    uint32_t fd = rd32(c, stream_desc(si) + SD_FIELDS);
-    int16_t t = (int16_t)rd16(c, fd + FD_TYPE);
+    c->ebp = s;
+    uint32_t a1[1] = { s };
+    int16_t t = (int16_t)call_at(c, sp - 0x30, f_10135b20, 0x1013276du, 1, a1);
     wr16(c, tref + 4, (uint16_t)t);
+    c->edi = si;
+    uint32_t fd = rd32(c, stream_desc(si) + SD_FIELDS);
     wr8(c, tref + 6, rd8(c, fd + FD_FLAG));
-    uint32_t slot = item_slot(t, sp, shorts);
-    if (!slot) return (uint32_t)(t + 5) & 0xffffff00u;
+    t = (int16_t)call_at(c, sp - 0x34, f_10135b20, 0x10132794u, 1, a1);
+    uint32_t slot = item_slot(t, sp, 0);
+    if (!slot) {
+        r = (uint32_t)(t + 5) & 0xffffff00u;
+        goto out;
+    }
     wr32(c, tref, slot);
     uint32_t end = p + (n & 0xff);
-    if (shorts) {
-        wr16(c, cref + 4, (uint16_t)T_SHORT);
-        wr32(c, sp + 12, end);
-        wr32(c, cref, sp - 0x20);
-    } else {
-        wr16(c, cref + 4, 0xffff);
-        wr32(c, sp - 0x20, end);
-        wr32(c, cref, sp + 8);
-    }
+    wr16(c, cref + 4, 0xffff);
+    wr32(c, sp - 0x20, end);
+    wr32(c, cref, sp + 8);
     wr8(c, cref + 6, rd8(c, tref + 6));
-    if (p >= end) return (p & 0xffffff00u) | 1;
-    for (;;) {
-        if (shorts) {
-            uint8_t b0 = rd8(c, p), b1 = rd8(c, p + 1);
-            uint32_t v = ((uint32_t)(b0 & 0x7f) << 8) | b1;
-            if (b0 & 0x80) v = 0u - v;
-            wr32(c, sp - 0x20, v);
-            p += 2;
-        } else {
-            wr8(c, sp + 8, rd8(c, p));
-            p++;
-            wr32(c, sp + 12, p);
-        }
-        if (rd16(c, tref + 4) != rd16(c, cref + 4)) rl_assign(c, eng, tref, cref);
-        uint32_t args[5] = { eng, shorts ? rd32(c, sp + 8) : s, rd32(c, a), rd32(c, b), tref };
-        if (!(call_at(c, sp - 0x30, f_10136570, shorts ? 0x101329cau : 0x10132844u, 5, args) & 0xff))
-            return c->eax & 0xffffff00u;
-        if (p >= rd32(c, shorts ? sp + 12 : sp - 0x20)) return (p & 0xffffff00u) | 1;
-        uint32_t bm = rd32(c, b);
-        uint32_t args2[5] = { eng, shorts ? rd32(c, sp + 8) : s, rd32(c, bm + 4 * si + 0xc) & ~3u, bm, k5 };
-        uint32_t m = call_at(c, sp - 0x30, f_10136720, shorts ? 0x101329f3u : 0x1013286eu, 5, args2);
-        wr32(c, a, m);
-        if (!m) return 0;
+    c->ebx = end;
+    if (p >= end) {
+        r = (p & 0xffffff00u) | 1;
+        goto out;
     }
+    c->esi = eng;
+    c->ebx = k5;
+    for (;;) {
+        wr8(c, sp + 8, rd8(c, p));
+        p++;
+        wr32(c, sp + 12, p);
+        if (rd16(c, tref + 4) != rd16(c, cref + 4)) {
+            c->eax = cref;
+            c->ecx = tref;
+            call3(c, sp - 0x30, f_10138730, 0x1013282du, eng, tref, cref);
+        }
+        uint32_t args[5] = { eng, s, rd32(c, a), rd32(c, b), tref };
+        c->eax = rd32(c, b);
+        c->ecx = rd32(c, a);
+        c->edx = tref;
+        if (!(call_at(c, sp - 0x30, f_10136570, 0x10132844u, 5, args) & 0xff)) {
+            r = c->eax & 0xffffff00u;
+            goto out;
+        }
+        if (p >= rd32(c, sp - 0x20)) {
+            r = (p & 0xffffff00u) | 1;
+            goto out;
+        }
+        uint32_t bm = rd32(c, b);
+        uint32_t link = rd32(c, bm + 4 * si + 0xc) & ~3u;
+        uint32_t args2[5] = { eng, s, link, bm, k5 };
+        c->eax = link;
+        uint32_t m = call_at(c, sp - 0x30, f_10136720, 0x1013286eu, 5, args2);
+        wr32(c, a, m);
+        if (!m) {
+            r = 0;
+            goto out;
+        }
+    }
+out:
+    c->ebx = ebx;
+    c->esi = esi;
+    c->edi = edi;
+    c->ebp = ebp;
+    return r;
+}
+
+/* FUN_101328a0 (16-bit items) as the original runs it, through the machine: ebx n (then the end, then s),
+ * esi s (then eng), ebp s & 0xff, edi p */
+static uint32_t insert_shorts(cpu *c, uint32_t sp, uint32_t eng, uint32_t s, uint32_t p, uint32_t n, uint32_t k5)
+{
+    uint32_t a = eng + ENG_SYNC_A, b = eng + ENG_SYNC_B;
+    uint32_t ebx = c->ebx, esi = c->esi, edi = c->edi, ebp = c->ebp, r;
+    c->ebx = n;
+    if (!(n & 0xff)) {
+        uint32_t args[4] = { eng, s, rd32(c, a), rd32(c, b) };
+        c->eax = eng;
+        c->ecx = s;
+        c->edx = rd32(c, a);
+        r = (call_at(c, sp - 0x30, f_10136a20, 0x101328c6u, 4, args) & 0xffffff00u) | 1;
+        goto out;
+    }
+    uint32_t si = s & 0xff;
+    uint32_t tref = sp - 0x18, cref = sp - 0x10;
+    c->esi = s;
+    uint32_t a1[1] = { s };
+    int16_t t = (int16_t)call_at(c, sp - 0x30, f_10135b20, 0x101328ddu, 1, a1);
+    wr16(c, tref + 4, (uint16_t)t);
+    c->ebp = si;
+    uint32_t fd = rd32(c, stream_desc(si) + SD_FIELDS);
+    wr8(c, tref + 6, rd8(c, fd + FD_FLAG));
+    t = (int16_t)call_at(c, sp - 0x34, f_10135b20, 0x10132906u, 1, a1);
+    uint32_t slot = item_slot(t, sp, 1);
+    if (!slot) {
+        r = (uint32_t)(t + 5) & 0xffffff00u;
+        goto out;
+    }
+    wr32(c, tref, slot);
+    uint32_t end = p + (n & 0xff);
+    c->edi = p;
+    c->ebx = end;
+    wr32(c, sp + 12, end);
+    wr16(c, cref + 4, (uint16_t)T_SHORT);
+    wr32(c, cref, sp - 0x20);
+    wr8(c, cref + 6, rd8(c, tref + 6));
+    if (p >= end) {
+        r = (p & 0xffffff00u) | 1;
+        goto out;
+    }
+    c->esi = eng;
+    for (;;) {
+        uint8_t b0 = rd8(c, p), b1 = rd8(c, p + 1);
+        uint32_t v = ((uint32_t)(b0 & 0x7f) << 8) | b1;
+        if (b0 & 0x80) v = 0u - v;
+        wr32(c, sp - 0x20, v);
+        p += 2;
+        c->edi = p;
+        if (rd16(c, tref + 4) != rd16(c, cref + 4)) {
+            c->ecx = cref;
+            c->edx = tref;
+            call3(c, sp - 0x30, f_10138730, 0x101329afu, eng, tref, cref);
+        }
+        uint32_t args[5] = { eng, rd32(c, sp + 8), rd32(c, a), rd32(c, b), tref };
+        c->ebx = rd32(c, sp + 8);
+        c->eax = tref;
+        c->ecx = rd32(c, b);
+        c->edx = rd32(c, a);
+        if (!(call_at(c, sp - 0x30, f_10136570, 0x101329cau, 5, args) & 0xff)) {
+            r = c->eax & 0xffffff00u;
+            goto out;
+        }
+        if (p >= rd32(c, sp + 12)) {
+            r = (p & 0xffffff00u) | 1;
+            goto out;
+        }
+        uint32_t bm = rd32(c, b);
+        uint32_t link = rd32(c, bm + 4 * si + 0xc) & ~3u;
+        uint32_t args2[5] = { eng, rd32(c, sp + 8), link, bm, k5 };
+        c->eax = bm;
+        c->ecx = k5;
+        c->edx = link;
+        uint32_t m = call_at(c, sp - 0x30, f_10136720, 0x101329f3u, 5, args2);
+        wr32(c, a, m);
+        if (!m) {
+            r = 0;
+            goto out;
+        }
+    }
+out:
+    c->ebx = ebx;
+    c->esi = esi;
+    c->edi = edi;
+    c->ebp = ebp;
+    return r;
+}
+
+uint32_t rl_insert_items(cpu *c, uint32_t sp, uint32_t eng, uint32_t s, uint32_t p, uint32_t n, uint32_t k5,
+                         int shorts)
+{
+    if (!shorts) return insert_bytes(c, sp, eng, s, p, n, k5);
+    return insert_shorts(c, sp, eng, s, p, n, k5);
 }
 
 /* FUN_101319a0: write the value val as text to output a (FUN_10141b30): numbers with sprintf, sync

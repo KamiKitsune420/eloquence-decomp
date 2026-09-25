@@ -136,7 +136,12 @@ void rl_throw_at(cpu *c, uint32_t sp, uint32_t eng)
  * cut point), up to a choice point: returns its label. A choice point of type 3 only counts if the cursor
  * can move on (rl_step). `depth` counts nested marks (types 4 and 6) to skip first. -1 at the rule's frame
  * or when aborting. */
-int32_t rl_backtrack(cpu *c, uint32_t eng, int32_t depth)
+int32_t rl_backtrack(cpu *c, uint32_t eng, int32_t depth) { return rl_backtrack_sp(c, 0, eng, depth); }
+
+/* sp: the esp the original is entered with (0 when a port calls it directly): its FUN_10135d00 call is then
+ * made through the machine with the original's registers (ebx eng, ebp depth, edi the entry, esi and the
+ * scratch registers from the pop) */
+int32_t rl_backtrack_sp(cpu *c, uint32_t sp, uint32_t eng, int32_t depth)
 {
     if (rd8(c, RS(eng) + RS_ABORT)) return -1;
     for (;;) {
@@ -160,7 +165,28 @@ int32_t rl_backtrack(cpu *c, uint32_t eng, int32_t depth)
         }
         case CS_NEXT:
             cs_pop_field(c, eng, WS_SZ_LABEL);
-            if (depth == 0 && rl_step(c, eng, 0, 1)) return (int32_t)rd32(c, top + 1);
+            if (depth == 0) {
+                uint32_t stepped;
+                if (sp) {
+                    uint32_t ebx = c->ebx, esi = c->esi, edi = c->edi, ebp = c->ebp;
+                    ws = WS(eng);
+                    c->ebx = eng;
+                    c->ebp = 0;
+                    c->edi = top;
+                    c->esi = rd32(c, ws + 0x44f);
+                    c->eax = ws;
+                    c->ecx = rd32(c, ws + 0xa4);
+                    c->edx = rd32(c, ws + WS_TOP);
+                    stepped = call3(c, sp - 0x10, f_10135d00, 0x1013138fu, eng, 0, 1) & 0xff;
+                    c->ebx = ebx;
+                    c->esi = esi;
+                    c->edi = edi;
+                    c->ebp = ebp;
+                } else {
+                    stepped = (uint32_t)rl_step(c, eng, 0, 1);
+                }
+                if (stepped) return (int32_t)rd32(c, top + 1);
+            }
             break;
         case CS_DOWN:
             cs_pop_field(c, eng, WS_SZ_MARK);
@@ -832,45 +858,63 @@ uint32_t rl_match_string_at(cpu *c, uint32_t sp, uint32_t eng, uint32_t s, uint3
     s &= 0xff;
     uint32_t end = str + (len & 0xff);
     uint32_t fd = field_desc(c, s, 0);
-    uint32_t get0 = rd32(c, rd32(c, stream_desc(s) + SD_GETTERS));
+    uint32_t getters = rd32(c, stream_desc(s) + SD_GETTERS), get0 = rd32(c, getters);
+    /* the original's registers across its calls: esi eng, edi 19 s, ebp the string's end, ebx the current
+     * byte (the getter and FUN_10135d00 see it) */
+    uint32_t ebx = c->ebx, esi = c->esi, edi = c->edi, ebp = c->ebp, r = 0;
+    c->esi = eng;
+    c->edi = s * 19;
+    c->ebp = end;
     if ((int16_t)rd16(c, fd + FD_TYPE) == -1) {
         /* byte symbols: compared directly */
         while (str < end) {
             uint32_t rs = RS(eng);
             uint32_t e = cursor_link(c, rs, rd32(c, rs + RS_POS_MARK), rd8(c, rs + RS_POS_STREAM)) & ~3u;
-            if (!e) return 1;
+            if (!e) { r = 1; break; }
             if (!is_mark(c, e)) {
+                c->ebx = str;
+                c->ecx = getters;
                 uint32_t p = icall1(c, sp - 0x20, get0, 0x10132cdeu, e + 8);
-                if (rd8(c, p) != rd8(c, str)) return 1;
+                if (rd8(c, p) != rd8(c, str)) { r = 1; break; }
                 str++;
             }
-            if (!rl_step(c, eng, 1, 1)) return 1;
+            c->ebx = str;
+            if (!(call3(c, sp - 0x20, f_10135d00, 0x10132cf8u, eng, 1, 1) & 0xff)) { r = 1; break; }
         }
-        return 0;
-    }
-    /* anything else: through the value comparison, the string byte as a symbol */
-    uint32_t ra = sp - 8, rb = sp - 0x10;
-    wr16(c, ra + 4, 0xffff);
-    uint8_t flag = rd8(c, fd + FD_FLAG);
-    wr8(c, ra + 6, flag);
-    wr8(c, rb + 6, flag);
-    wr16(c, rb + 4, rd16(c, fd + FD_TYPE));
-    while (str < end) {
-        uint32_t rs = RS(eng);
-        uint32_t e = cursor_link(c, rs, rd32(c, rs + RS_POS_MARK), rd8(c, rs + RS_POS_STREAM)) & ~3u;
-        if (!e) return 1;
-        uint32_t next = str;
-        if (!is_mark(c, e)) {
-            next = str + 1;
-            wr32(c, ra, str);
-            wr32(c, rb, icall1(c, sp - 0x20, get0, 0x10132d89u, e + 8));
-            rl_compare(c, eng, ra, rb);
-            if (rd8(c, RS(eng) + RS_CMP)) return 1;
+    } else {
+        /* anything else: through the value comparison, the string byte as a symbol */
+        uint32_t ra = sp - 8, rb = sp - 0x10;
+        wr16(c, ra + 4, 0xffff);
+        uint8_t flag = rd8(c, fd + FD_FLAG);
+        wr8(c, ra + 6, flag);
+        wr8(c, rb + 6, flag);
+        wr16(c, rb + 4, rd16(c, fd + FD_TYPE));
+        while (str < end) {
+            uint32_t rs = RS(eng);
+            uint32_t e = cursor_link(c, rs, rd32(c, rs + RS_POS_MARK), rd8(c, rs + RS_POS_STREAM)) & ~3u;
+            if (!e) { r = 1; break; }
+            uint32_t next = str;
+            if (!is_mark(c, e)) {
+                next = str + 1;
+                wr32(c, ra, str);
+                c->ebx = next;
+                c->ecx = getters;
+                wr32(c, rb, icall1(c, sp - 0x20, get0, 0x10132d89u, e + 8));
+                c->edx = rb;
+                c->eax = ra;
+                call3(c, sp - 0x20, f_10138920, 0x10132d9du, eng, ra, rb);
+                if (rd8(c, RS(eng) + RS_CMP)) { r = 1; break; }
+            }
+            c->ebx = next;
+            if (!(call3(c, sp - 0x20, f_10135d00, 0x10132db7u, eng, 1, 1) & 0xff)) { r = 1; break; }
+            str = next;
         }
-        if (!rl_step(c, eng, 1, 1)) return 1;
-        str = next;
     }
-    return 0;
+    c->ebx = ebx;
+    c->esi = esi;
+    c->edi = edi;
+    c->ebp = ebp;
+    return r;
 }
 
 /* FUN_10132de0: match 16-bit values (len bytes at p, big-endian sign-magnitude) against field 0 of
@@ -886,24 +930,41 @@ uint32_t rl_match_shorts_at(cpu *c, uint32_t sp, uint32_t eng, uint32_t s, uint3
     wr8(c, ra + 6, rd8(c, fd + FD_FLAG));
     wr16(c, rb + 4, rd16(c, fd + FD_TYPE));
     wr8(c, rb + 6, rd8(c, fd + FD_FLAG));
-    uint32_t get0 = rd32(c, rd32(c, stream_desc(s) + SD_GETTERS));
+    uint32_t getters = rd32(c, stream_desc(s) + SD_GETTERS), get0 = rd32(c, getters);
+    /* the original's registers: edi 19 s, ebp the end, esi p; ebx the item's magnitude at the getter call,
+     * then eng */
+    uint32_t ebx = c->ebx, esi = c->esi, edi = c->edi, ebp = c->ebp, r = 0;
+    c->edi = s * 19;
+    c->ebp = end;
     while (p < end) {
         uint32_t rs = RS(eng);
         uint32_t e = cursor_link(c, rs, rd32(c, rs + RS_POS_MARK), rd8(c, rs + RS_POS_STREAM)) & ~3u;
-        if (!e) return 1;
+        if (!e) { r = 1; break; }
         if (!is_mark(c, e)) {
             uint8_t b0 = rd8(c, p), b1 = rd8(c, p + 1);
             uint32_t v = ((uint32_t)(b0 & 0x7f) << 8) | b1;
+            c->ebx = v;
             if (b0 & 0x80) v = 0u - v;
             wr32(c, sp + 16, v);
             p += 2;
+            c->esi = p;
+            c->ecx = getters;
             wr32(c, rb, icall1(c, sp - 0x20, get0, 0x10132eb7u, e + 8));
-            rl_compare(c, eng, ra, rb);
-            if (rd8(c, RS(eng) + RS_CMP)) return 1;
+            c->ebx = eng;
+            c->edx = rb;
+            c->eax = ra;
+            call3(c, sp - 0x20, f_10138920, 0x10132ecfu, eng, ra, rb);
+            if (rd8(c, RS(eng) + RS_CMP)) { r = 1; break; }
         }
-        if (!rl_step(c, eng, 1, 1)) return 1;
+        c->esi = p;
+        c->edx = eng;
+        if (!(call3(c, sp - 0x20, f_10135d00, 0x10132eedu, eng, 1, 1) & 0xff)) { r = 1; break; }
     }
-    return 0;
+    c->ebx = ebx;
+    c->esi = esi;
+    c->edi = edi;
+    c->ebp = ebp;
+    return r;
 }
 
 /* resolve a sync variable with a pending offset: FUN_1013b5b0 through the machine */

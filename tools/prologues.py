@@ -46,6 +46,9 @@ def prologue(img, md, a):
             base, sp = "((%s - %d) & %su)" % (base, sp, ops.split(", ")[1]), 0
         elif x.mnemonic in ("test", "cmp"):
             continue
+        elif x.mnemonic == "mov" and re.match(r"^(byte|word|dword) ptr \[esp( \+ (0x[0-9a-f]+|\d+))?\], ", ops):
+            # a store into its own frame (a local the port writes itself): registers and esp unchanged
+            continue
         elif x.mnemonic in ("mov", "movzx", "movsx", "xor", "lea", "and", "or", "add", "sub", "shl", "shr",
                             "sar", "inc", "dec", "neg", "not", "imul") and \
                 x.operands[0].type == 1 and x.reg_name(x.operands[0].reg) != "esp":

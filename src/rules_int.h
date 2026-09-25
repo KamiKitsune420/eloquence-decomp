@@ -39,6 +39,9 @@ void f_10135d00(cpu *c);    /* rl_step */
 void f_10134690(cpu *c);    /* rl_set_a */
 void f_10135b20(cpu *c);    /* a stream's field type */
 void f_10136a20(cpu *c);    /* rl_delete_range */
+void f_101310f0(cpu *c);    /* rl_start_at */
+void f_10135e40(cpu *c);    /* rl_step_to */
+void f_10135f70(cpu *c);    /* rl_skip_marks */
 void f_101364c0(cpu *c);    /* rl_token_init */
 void f_10138d40(cpu *c);    /* pool_alloc for a stream's token */
 void f_101360a0(cpu *c);    /* rl_next_token */
@@ -185,6 +188,7 @@ uint32_t rl_trail_ref(cpu *c, uint32_t eng, uint32_t ref);
 void     rl_assign(cpu *c, uint32_t eng, uint32_t dst, uint32_t src);
 void     rl_compare(cpu *c, uint32_t eng, uint32_t a, uint32_t b);
 void     rl_compare_sp(cpu *c, uint32_t sp, uint32_t eng, uint32_t a, uint32_t b);
+int32_t  rl_backtrack_sp(cpu *c, uint32_t sp, uint32_t eng, int32_t depth);
 void     rl_assign_sp(cpu *c, uint32_t sp, uint32_t eng, uint32_t dst, uint32_t src);
 void     rl_push(cpu *c, uint32_t eng, uint32_t ref);
 uint32_t rl_pop(cpu *c, uint32_t eng, uint32_t ref);
