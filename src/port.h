@@ -16,10 +16,20 @@
 #include "x86rt.h"
 
 #ifdef DIFFTEST
-#define PORT_FN(a) void port_##a(cpu *c)
+#define PORT_FN_NAME(a) port_##a
 #else
-#define PORT_FN(a) void f_##a(cpu *c)
+#define PORT_FN_NAME(a) f_##a
 #endif
+
+/* the stack bytes the original's prologue writes (its pushes of the caller's registers: src/gen/prologues.c
+ * from tools/prologues.py), written first so that the scratch a port leaves below its entry esp is the
+ * original's there - later code reads some of it uninitialized */
+void port_prologue(cpu *c, uint32_t a);
+
+#define PORT_FN(a)                                                                          \
+    static void port_body_##a(cpu *c);                                                      \
+    void PORT_FN_NAME(a)(cpu *c) { port_prologue(c, 0x##a##u); port_body_##a(c); }          \
+    static void port_body_##a(cpu *c)
 
 /* the n-th 32-bit argument of a function entered by a guest call */
 #define ARG(n) rd32(c, c->esp + 4u + 4u * (uint32_t)(n))

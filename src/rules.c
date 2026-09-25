@@ -19,6 +19,9 @@ int rl_enter(cpu *c, uint32_t eng, uint32_t frame, uint32_t slot, uint32_t scope
 {
     wr32(c, eng + ENG_RESULT, 0);
     if (!frame) return 1;
+    /* the original saves ebx and edi here (after `push esi`, which port_prologue writes) */
+    wr32(c, c->esp - 8, c->ebx);
+    wr32(c, c->esp - 12, c->edi);
     uint32_t rs = RS(eng);
     int32_t n = (int32_t)rd32(c, rs + RS_NVARS);
     if (n >= 999) return 1;
@@ -278,6 +281,7 @@ void rl_ref_at(cpu *c, uint32_t sp, uint32_t eng, uint32_t ref, uint32_t val)
         return;
     }
     /* the getter is called with esp as the original has it (entry - 8: edi, esi saved) */
+    wr32(c, sp - 8, c->esi);
     uint32_t data = icall1(c, sp - 8, getter(c, (uint32_t)(int32_t)t, (uint32_t)(int32_t)f), 0x1013158cu, val + 4);
     wr32(c, ref, data);
     uint32_t fd = field_desc(c, (uint32_t)(int32_t)val_type(c, val), (uint32_t)(int32_t)f);
@@ -377,16 +381,26 @@ uint32_t rl_var_init_sync(cpu *c, uint32_t eng, uint32_t var)
 uint32_t rl_trail_at(cpu *c, uint32_t sp, uint32_t eng, uint32_t val)
 {
     uint32_t ref = sp - 8;
-    rl_ref_at(c, AT(sp - 0xc, 3), eng, ref, val);
-    return rl_trail_ref(c, eng, ref);
+    uint32_t esi = c->esi;                  /* the original keeps eng in esi across its calls */
+    c->esi = eng;
+    call3(c, sp - 0xc, f_10131520, 0x10131508u, eng, ref, val);
+    uint32_t r = call2(c, sp - 0x18, f_10138510, 0x10131513u, eng, ref);
+    c->esi = esi;
+    return r;
 }
 
 /* FUN_10131cd0: push the value at `val` on the value stack */
 void rl_push_val_at(cpu *c, uint32_t sp, uint32_t eng, uint32_t val)
 {
     uint32_t ref = sp - 8;
-    rl_ref_at(c, AT(sp - 0x10, 3), eng, ref, val);
-    rl_push(c, eng, ref);
+    /* the original keeps val in esi and eng in edi across its calls (their callees save them) */
+    uint32_t esi = c->esi, edi = c->edi;
+    c->esi = val;
+    c->edi = eng;
+    call3(c, sp - 0x10, f_10131520, 0x10131ce9u, eng, ref, val);
+    call2(c, sp - 0x1c, f_10138b80, 0x10131cf4u, eng, ref);
+    c->esi = esi;
+    c->edi = edi;
     val_release(c, val);
 }
 
@@ -397,8 +411,7 @@ void rl_push_const_at(cpu *c, uint32_t sp, uint32_t eng, int16_t type, uint32_t 
     wr16(c, ref + 4, (uint16_t)type);
     wr32(c, ref, sp + 8);
     wr8(c, ref + 6, 0);
-    (void)ret;
-    rl_push(c, eng, ref);
+    call2(c, sp - 8, f_10138b80, ret, eng, ref);
 }
 
 /* FUN_10131e90: pop the value stack into the variable `var` */
@@ -416,34 +429,49 @@ void rl_pop_into_at(cpu *c, uint32_t sp, uint32_t eng, uint32_t var)
 void rl_set_short_at(cpu *c, uint32_t sp, uint32_t eng, uint32_t var)
 {
     int16_t v = (int16_t)rd16(c, sp + 12);
-    if (rd8(c, RS(eng) + RS_TRAIL)) rl_trail_at(c, AT(sp - 0x18, 2), eng, var);
+    uint32_t esi = c->esi, edi = c->edi;    /* the original: edi eng, esi var */
+    c->edi = eng;
+    c->esi = var;
+    if (rd8(c, RS(eng) + RS_TRAIL)) {
+        c->eax = RS(eng);
+        call2(c, sp - 0x18, f_101314f0, 0x10132601u, eng, var);
+    }
     int16_t t = val_type(c, var);
     switch (t) {
     case T_SYNC:
     case T_INT:
         wr32(c, var + 2, (uint32_t)(int32_t)v);
-        return;
+        break;
     case T_DOUBLE:
         wr32(c, sp + 12, (uint32_t)(int32_t)v);
         store_double(c, var + 2, (double)v);
-        return;
+        break;
     case T_SHORT:
         wr16(c, var + 2, (uint16_t)v);
-        return;
+        break;
     default:
+        if (t < 0) {
+            uint32_t a1[1] = { eng };
+            call_at(c, sp - 0x18, f_10130e80, 0x1013269cu, 1, a1);   /* longjmps */
+            break;
+        }
+        {
+            uint32_t cref = sp - 0x10, ref = sp - 8;
+            wr16(c, cref + 4, (uint16_t)T_SHORT);
+            wr32(c, cref, sp + 12);
+            wr8(c, cref + 6, 0);
+            c->eax = ref;
+            c->edx = sp + 12;
+            call3(c, sp - 0x18, f_10131520, 0x10132671u, eng, ref, var);
+            c->ecx = cref;
+            c->edx = ref;
+            call3(c, sp - 0x24, f_10138730, 0x10132681u, eng, ref, cref);
+            val_release(c, var);
+        }
         break;
     }
-    if (t < 0) {
-        rl_throw_at(c, AT(sp - 0x18, 1), eng);
-        return;
-    }
-    uint32_t cref = sp - 0x10, ref = sp - 8;
-    wr16(c, cref + 4, (uint16_t)T_SHORT);
-    wr32(c, cref, sp + 12);
-    wr8(c, cref + 6, 0);
-    rl_ref_at(c, AT(sp - 0x18, 3), eng, ref, var);
-    rl_assign(c, eng, ref, cref);
-    val_release(c, var);
+    c->esi = esi;
+    c->edi = edi;
 }
 
 /* FUN_101332d0: trail the variable if trailing is on; the value's field reference is used up. Returns
@@ -451,7 +479,13 @@ void rl_set_short_at(cpu *c, uint32_t sp, uint32_t eng, uint32_t var)
 uint32_t rl_touch_at(cpu *c, uint32_t sp, uint32_t eng, uint32_t val)
 {
     uint32_t eax = eng;
-    if (rd8(c, RS(eng) + RS_TRAIL)) eax = rl_trail_at(c, AT(sp - 4, 2), eng, val);
+    if (rd8(c, RS(eng) + RS_TRAIL)) {
+        uint32_t esi = c->esi;              /* the original keeps val in esi */
+        c->esi = val;
+        c->eax = eng;
+        eax = call2(c, sp - 4, f_101314f0, 0x101332edu, eng, val);
+        c->esi = esi;
+    }
     val_release(c, val);
     return eax;
 }
@@ -460,10 +494,23 @@ uint32_t rl_touch_at(cpu *c, uint32_t sp, uint32_t eng, uint32_t val)
 void rl_assign_at(cpu *c, uint32_t sp, uint32_t eng, uint32_t dst, uint32_t src)
 {
     uint32_t rd = sp - 8, rsrc = sp - 0x10;
-    if (rd8(c, RS(eng) + RS_TRAIL)) rl_trail_at(c, AT(sp - 0x1c, 2), eng, dst);
-    rl_ref_at(c, AT(sp - 0x1c, 3), eng, rd, dst);
-    rl_ref_at(c, AT(sp - 0x28, 3), eng, rsrc, src);
-    rl_assign(c, eng, rd, rsrc);
+    uint32_t ebx = c->ebx, esi = c->esi, edi = c->edi;
+    /* through the machine as the original: esi eng, edi dst, then ebx src (and its scratch registers) */
+    c->esi = eng;
+    c->edi = dst;
+    c->eax = RS(eng);
+    if (rd8(c, RS(eng) + RS_TRAIL)) call2(c, sp - 0x1c, f_101314f0, 0x10133272u, eng, dst);
+    c->ecx = rd;
+    call3(c, sp - 0x1c, f_10131520, 0x10133281u, eng, rd, dst);
+    c->ebx = src;
+    c->edx = rsrc;
+    call3(c, sp - 0x28, f_10131520, 0x10133291u, eng, rsrc, src);
+    c->eax = rsrc;
+    c->ecx = rd;
+    call3(c, sp - 0x34, f_10138730, 0x101332a1u, eng, rd, rsrc);
+    c->ebx = ebx;
+    c->esi = esi;
+    c->edi = edi;
     val_release(c, dst);
     val_release(c, src);
 }
@@ -472,10 +519,23 @@ void rl_assign_at(cpu *c, uint32_t sp, uint32_t eng, uint32_t dst, uint32_t src)
 void rl_compare_at(cpu *c, uint32_t sp, uint32_t eng, uint32_t a, uint32_t b, uint32_t ret)
 {
     uint32_t ra = sp - 8, rb = sp - 0x10;
-    rl_ref_at(c, AT(sp - 0x1c, 3), eng, ra, a);
-    rl_ref_at(c, AT(sp - 0x28, 3), eng, rb, b);
-    (void)ret;
-    rl_compare(c, eng, ra, rb);
+    uint32_t ebx = c->ebx, esi = c->esi, edi = c->edi;
+    /* through the machine as the original: esi eng, edi a, then ebx b (and the scratch registers it has).
+     * `ret` is the last call's return address; the code is the same in FUN_10132be0 and FUN_10134280, the
+     * other two calls return 0x20 and 0x10 bytes before it */
+    c->esi = eng;
+    c->edi = a;
+    c->eax = ra;
+    call3(c, sp - 0x1c, f_10131520, ret - 0x20, eng, ra, a);
+    c->ebx = b;
+    c->ecx = rb;
+    call3(c, sp - 0x28, f_10131520, ret - 0x10, eng, rb, b);
+    c->edx = rb;
+    c->eax = ra;
+    call3(c, sp - 0x34, f_10138920, ret, eng, ra, rb);
+    c->ebx = ebx;
+    c->esi = esi;
+    c->edi = edi;
     val_release(c, a);
     val_release(c, b);
 }
@@ -484,10 +544,11 @@ void rl_compare_at(cpu *c, uint32_t sp, uint32_t eng, uint32_t a, uint32_t b, ui
 static void compare_popped(cpu *c, uint32_t sp, uint32_t eng, uint32_t a, uint32_t b, uint32_t r1, uint32_t r2,
                            uint32_t r3)
 {
-    (void)sp; (void)r1; (void)r2; (void)r3;
-    rl_pop(c, eng, a);
-    rl_pop(c, eng, b);
-    rl_compare(c, eng, a, b);
+    /* through the machine as the original calls them: pop into a, pop into b, compare - each call's
+     * arguments below the previous one's (removed together afterwards) */
+    call2(c, sp, f_10138c60, r1, eng, a);
+    call2(c, sp - 8, f_10138c60, r2, eng, b);
+    call3(c, sp - 0x10, f_10138920, r3, eng, a, b);
 }
 
 /* how the comparison predicates read RS_CMP */
@@ -507,17 +568,23 @@ static int cmp_test(int8_t v, int op)
 uint32_t rl_cmp_val_short_at(cpu *c, uint32_t sp, uint32_t eng, uint32_t val, uint32_t k, int op, uint32_t base)
 {
     uint32_t args[2] = { eng, val };
+    uint32_t esi = c->esi;                  /* the original keeps eng in esi across its calls */
+    c->esi = eng;
     call_at(c, sp - 0x14, f_10131cd0, base + 0x13, 2, args);
     args[1] = k;
     call_at(c, sp - 0x1c, f_10131d70, base + 0x1e, 2, args);
     compare_popped(c, sp - 0x24, eng, sp - 8, sp - 0x10, base + 0x29, base + 0x34, base + 0x44);
+    c->esi = esi;
     return (uint32_t)cmp_test((int8_t)rd8(c, RS(eng) + RS_CMP), op);
 }
 
 /* FUN_10132370 family: compare the two top values of the value stack */
 uint32_t rl_cmp_stack_at(cpu *c, uint32_t sp, uint32_t eng, int op, uint32_t base)
 {
+    uint32_t esi = c->esi;                  /* the original keeps eng in esi across its calls */
+    c->esi = eng;
     compare_popped(c, sp - 0x14, eng, sp - 8, sp - 0x10, base + 0x13, base + 0x1e, base + 0x2e);
+    c->esi = esi;
     return (uint32_t)cmp_test((int8_t)rd8(c, RS(eng) + RS_CMP), op);
 }
 
@@ -802,6 +869,7 @@ uint32_t rl_goto_a_at(cpu *c, uint32_t sp, uint32_t eng, uint32_t s, int back, i
     }
     uint32_t m = rd32(c, sv);
     if (!m) return 1;
+    wr32(c, sp - 0xc, c->ebp);             /* the original borrows ebp for the stream check (push ebp) */
     uint32_t rs = RS(eng);
     if (!(rd8(c, m + 4 * (rd32(c, rs + RS_BACK) + (s & 0xff))) & 1)) return 1;
     wr32(c, rs + RS_POS_MARK, m);
@@ -907,7 +975,14 @@ uint32_t rl_align1(cpu *c, uint32_t eng, uint32_t label, uint32_t s)
  * and the cursor */
 void rl_mark_here_at(cpu *c, uint32_t sp, uint32_t eng, uint32_t label, uint32_t val)
 {
-    if (rd8(c, RS(eng) + RS_TRAIL)) rl_trail_at(c, AT(sp - 8, 2), eng, val);
+    if (rd8(c, RS(eng) + RS_TRAIL)) {
+        uint32_t esi = c->esi, edi = c->edi;  /* the original: esi eng, edi val */
+        c->esi = eng;
+        c->edi = val;
+        call2(c, sp - 8, f_101314f0, 0x1013331eu, eng, val);
+        c->esi = esi;
+        c->edi = edi;
+    }
     wr32(c, val + 2, rd32(c, RS(eng) + RS_POS_MARK));
     rl_push_next(c, eng, label);
     rl_push_pos(c, eng);
@@ -978,9 +1053,14 @@ static void store_undef_double(cpu *c, uint32_t d)
 
 /* FUN_10138730: *dst := *src, converting between int, short and double (keeping the undefined marker);
  * other types are copied as they are. */
-void rl_assign(cpu *c, uint32_t eng, uint32_t dst, uint32_t src)
+void rl_assign(cpu *c, uint32_t eng, uint32_t dst, uint32_t src) { rl_assign_sp(c, 0, eng, dst, src); }
+
+/* sp: the esp the original is entered with, for the stack bytes it writes (0 when a port calls it
+ * directly); its frame is aligned: esp = ((sp - 4) & ~7) - 16 at its calls of _ftol */
+void rl_assign_sp(cpu *c, uint32_t sp, uint32_t eng, uint32_t dst, uint32_t src)
 {
     (void)eng;
+    uint32_t ftol_ret = sp ? ((sp - 4) & ~7u) - 20 : 0;   /* where a call of _ftol puts its return address */
     int16_t td = (int16_t)rd16(c, dst + 4);
     switch (td) {
     case T_SYNC:
@@ -990,12 +1070,16 @@ void rl_assign(cpu *c, uint32_t eng, uint32_t dst, uint32_t src)
         int16_t ts = (int16_t)rd16(c, src + 4);
         if (ts == T_INT) {
             uint32_t v = rd32(c, rd32(c, src));
+            if (ftol_ret) wr32(c, ftol_ret + 16, v);    /* the int for fild, a local (stored in any case) */
             if (v == UNDEF_INT) store_undef_double(c, rd32(c, dst));
             else store_double(c, rd32(c, dst), (double)(int32_t)v);
         } else if (ts == T_SHORT) {
             uint16_t v = rd16(c, rd32(c, src));
             if (v == UNDEF_SHORT) store_undef_double(c, rd32(c, dst));
-            else store_double(c, rd32(c, dst), (double)(int16_t)v);
+            else {
+                if (ftol_ret) wr32(c, ftol_ret + 16, (uint32_t)(int32_t)(int16_t)v);
+                store_double(c, rd32(c, dst), (double)(int16_t)v);
+            }
         } else if (ts == T_DOUBLE) {
             uint32_t a = rd32(c, src), d = rd32(c, dst);
             wr32(c, d, rd32(c, a));
@@ -1008,7 +1092,10 @@ void rl_assign(cpu *c, uint32_t eng, uint32_t dst, uint32_t src)
         if (ts == T_DOUBLE) {
             uint32_t a = rd32(c, src);
             if (rd32(c, a) == 0 && rd32(c, a + 4) == UNDEF_DHI) wr16(c, rd32(c, dst), UNDEF_SHORT);
-            else wr16(c, rd32(c, dst), (uint16_t)ftol32(rd64(c, a)));
+            else {
+                if (ftol_ret) wr32(c, ftol_ret, 0x1013882du);
+                wr16(c, rd32(c, dst), (uint16_t)ftol32(rd64(c, a)));
+            }
         } else if (ts == T_SHORT || ts == T_INT) {
             wr16(c, rd32(c, dst), rd16(c, rd32(c, src)));
         }
@@ -1019,7 +1106,10 @@ void rl_assign(cpu *c, uint32_t eng, uint32_t dst, uint32_t src)
         if (ts == T_DOUBLE) {
             uint32_t a = rd32(c, src);
             if (rd32(c, a) == 0 && rd32(c, a + 4) == UNDEF_DHI) wr32(c, rd32(c, dst), UNDEF_INT);
-            else wr32(c, rd32(c, dst), ftol32(rd64(c, a)));
+            else {
+                if (ftol_ret) wr32(c, ftol_ret, 0x101387d5u);
+                wr32(c, rd32(c, dst), ftol32(rd64(c, a)));
+            }
         } else if (ts == T_SHORT) {
             wr32(c, rd32(c, dst), (uint32_t)(int32_t)(int16_t)rd16(c, rd32(c, src)));
         } else if (ts == T_INT) {
@@ -1048,7 +1138,11 @@ static int cmp3(int64_t x, int64_t y) { return x < y ? -1 : x == y ? 0 : 1; }
 /* FUN_10138920: compare *a with *b into RS_CMP (-1, 0, 1). Numbers compare across int, short and double
  * as the original does (a double only with a double or an int; NaN as the x87 compare leaves it); tokens
  * of the same stream byte by byte; other type pairs leave RS_CMP alone (numbers) or make it 1. */
-void rl_compare(cpu *c, uint32_t eng, uint32_t a, uint32_t b)
+void rl_compare(cpu *c, uint32_t eng, uint32_t a, uint32_t b) { rl_compare_sp(c, 0, eng, a, b); }
+
+/* sp: the esp the original is entered with, for the stack bytes it writes (0 when a port calls it
+ * directly, not in the original's place) */
+void rl_compare_sp(cpu *c, uint32_t sp, uint32_t eng, uint32_t a, uint32_t b)
 {
     int16_t ta = (int16_t)rd16(c, a + 4);
     switch (ta) {
@@ -1094,6 +1188,11 @@ void rl_compare(cpu *c, uint32_t eng, uint32_t a, uint32_t b)
         return;
     }
     case T_SYNC:
+        if (sp) {                               /* push mark; call FUN_101359b0, twice (no frame there) */
+            wr32(c, sp - 8, rd32(c, rd32(c, a)));
+            wr32(c, sp - 0xc, rd32(c, rd32(c, b)));
+            wr32(c, sp - 0x10, 0x10138b06u);
+        }
         set_cmp(c, eng, rl_mark_key(rd32(c, rd32(c, a))) == rl_mark_key(rd32(c, rd32(c, b))) ? 0 : 1);
         return;
     default: {
@@ -1101,6 +1200,7 @@ void rl_compare(cpu *c, uint32_t eng, uint32_t a, uint32_t b)
             set_cmp(c, eng, 1);
             return;
         }
+        if (sp) wr32(c, sp - 8, c->edi);        /* push edi around the byte compare */
         uint32_t n = rd32(c, stream_desc((uint32_t)(int32_t)ta) + SD_TOKEN_SIZE);
         uint32_t pa = rd32(c, a), pb = rd32(c, b);
         int r = 0;

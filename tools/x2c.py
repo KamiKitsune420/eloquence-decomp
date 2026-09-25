@@ -315,6 +315,10 @@ class Translator:
         out = ["static void %s(cpu *c)" % name, "{"]
         if fn.entry in self.hooks:
             out.append("    if (x86_on_enter) x86_on_enter(c, 0x%xu);" % fn.entry)
+        if addrs and addrs[0] != fn.entry:
+            # the code reachable from the entry reaches lower addresses (a loop, or an entry inside another
+            # function that jumps back): the blocks are emitted by address, so start at the entry
+            out.append("    goto L_%08x;" % fn.entry)
         for a in addrs:
             if a in fn.targets:
                 out.append("L_%08x:;" % a)
@@ -803,11 +807,13 @@ def main():
     ap.add_argument("--replace", nargs="*", default=[],
                     help="functions ported by hand: the recompiled one becomes f_XXXXXXXX_recomp, the hand port "
                          "defines f_XXXXXXXX")
-    ap.add_argument("--replace-list", default=None,
-                    help="a file of PORTED(XXXXXXXX, flags) lines (src/ported.h): added to --replace")
+    ap.add_argument("--replace-list", action="append", default=[],
+                    help="a file of PORTED(XXXXXXXX, flags) lines (src/ported.h, src/gen/lifted.h): added to "
+                         "--replace; may be given several times (a missing file counts as empty)")
     a = ap.parse_args()
-    if a.replace_list:
-        a.replace += re.findall(r"(?m)^PORTED\(([0-9a-fA-F]{8})", open(a.replace_list).read())
+    for rl in a.replace_list:
+        if os.path.exists(rl):
+            a.replace += re.findall(r"(?m)^PORTED\(([0-9a-fA-F]{8})", open(rl).read())
     img = Image(a.image)
     tr = Translator(img, ghidra_entries(a.image))
     tr.hooks = {int(h, 16) for h in a.hook}

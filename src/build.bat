@@ -23,7 +23,7 @@ rem the whole engine, recompiled: gen\enu_*.c (tools\x2c.py --split 24)
 if not exist %B%\enu mkdir %B%\enu
 cl %CF% /I. /MP4 /c /Fo%B%\enu\ gen\enu_*.c || exit /b 1
 rem with the hand-written synthesizer (klatt.c) and frame builder (framer.c) in place of the recompiled ones
-cl %CF% /Fo%B%\ %RT% klatt.c klatt_guest.c framer.c framer_guest.c rules.c rules_ops.c rules_delta.c rules_pool.c rules_edit.c rules_guest.c rules_io.c tracks.c eloq_run.c %B%\enu\*.obj /Fe:%B%\eloq_run.exe || exit /b 1
+cl %CF% /Fo%B%\ %RT% klatt.c klatt_guest.c framer.c framer_guest.c rules.c rules_ops.c rules_delta.c rules_pool.c rules_edit.c rules_guest.c rules_io.c tracks.c gen\prologues.c eloq_run.c %B%\enu\*.obj /Fe:%B%\eloq_run.exe || exit /b 1
 goto :eof
 
 :findvs

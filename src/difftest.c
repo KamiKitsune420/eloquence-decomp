@@ -5,6 +5,9 @@
  *   DIFFTEST=all | none | 101311a0,10131790 ...        which ported functions to check (default all)
  *   DIFFTEST_VERBOSE=n                                 print the first n mismatches in full (default 3)
  *
+ * The functions checked are those of src/ported.h and, in builds with ELOQ_LIFTED, the lifted rules of
+ * src/gen/lifted.h (tools/delta_lift.py).
+ *
  * Built by tools/build_engine.py (x64|x86) difftest: all of the engine's code compiled with -DX86_WTRACK
  * (memory writes are tracked) and the hand ports with -DDIFFTEST (their adapters are port_XXXXXXXX), in
  * build\<arch>\enu_wt\. tools/difftest.py runs it over the whole test matrix and sums the reports.
@@ -53,13 +56,19 @@ typedef struct {
     uint32_t addr;
     int flags;
     int enabled;
+    int lifted;                     /* from gen/lifted.h */
     long calls, checked, bad;
     char first[1024];
 } dt_fn;
 
 static dt_fn g_fns[] = {
-#define PORTED(a, fl) { 0x##a##u, fl, 1, 0, 0, 0, "" },
+#define PORTED(a, fl) { 0x##a##u, fl, 1, 0, 0, 0, 0, "" },
 #include "ported.h"
+#undef PORTED
+#ifdef ELOQ_LIFTED
+#define PORTED(a, fl) { 0x##a##u, fl, 1, 1, 0, 0, 0, "" },
+#include "gen/lifted.h"           /* the lifted rules (tools/delta_lift.py) */
+#endif
 #undef PORTED
 };
 #define NFNS (sizeof g_fns / sizeof g_fns[0])
@@ -77,6 +86,9 @@ static void dt_call(cpu *c, dt_fn *e, guest_fn port, guest_fn recomp);
         dt_call(c, e, port_##a, f_##a##_recomp);                                        \
     }
 #include "ported.h"
+#ifdef ELOQ_LIFTED
+#include "gen/lifted.h"           /* the lifted rules (tools/delta_lift.py) */
+#endif
 #undef PORTED
 
 /* ---------------------------------------------------------------- write tracking */
@@ -97,6 +109,8 @@ static int g_depth;                 /* active checks */
 static uint32_t *g_stamp;
 static uint32_t g_serial;
 static int g_recomp;                /* inside a recompiled reference run */
+static int g_scratch;               /* DIFFTEST_SCRATCH: compare the scratch below the entry esp too */
+static int g_rtrecomp;              /* DIFFTEST_RTRECOMP: the hand ports (not the lifted rules) run recompiled */
 
 static void blk_read(cpu *c, uint32_t blk, uint8_t *out)
 {
@@ -126,10 +140,42 @@ static wlog *log_add(level *L)
     return &L->log[L->n++];
 }
 
+/* DIFFTEST_WATCH=addr (debugging): every write into that address's block is reported with the writer's esp
+ * and return address, and the byte's value before the write */
+static uint32_t g_watch, g_watch_serial;
+static int g_watch_on = -1;
+
 void x86_wtrack(cpu *c, uint32_t a)
 {
     level *L = &g_lv[g_depth - 1];
     uint32_t b = a >> WT_BITS;
+    if (g_watch_on < 0) {
+        const char *e = getenv("DIFFTEST_WATCH");
+        g_watch_on = e != NULL;
+        if (e) g_watch = (uint32_t)strtoul(e, NULL, 16);
+    }
+    if (g_watch_on && b == g_watch >> WT_BITS) {
+        static uint32_t prev = 0;
+        if (prev) fprintf(stderr, "WROTE %s %08x = %08x\n", g_recomp ? "orig" : "port", prev, rd32(c, prev & ~3u));
+        prev = a;
+        fprintf(stderr, "WATCH %s depth %d write %08x esp %08x ret %08x byte %02x\n", g_recomp ? "orig" : "port",
+                g_depth, a, c->esp, rd32(c, c->esp), rd8(c, g_watch));
+        {   /* the code addresses on the stack above: the writer's callers */
+            int k = 0;
+            for (uint32_t sp = c->esp; sp < c->esp + 0x400 && k < 4; sp += 4) {
+                uint32_t v = rd32(c, sp);
+                if (v >= 0x10001000u && v < 0x10144000u) { fprintf(stderr, "    [%08x] %08x\n", sp, v); k++; }
+            }
+        }
+        if (g_watch_serial == L->serial) { g_stamp[b] = 0; return; }   /* logged at this level already */
+        g_watch_serial = L->serial;
+        wlog *w = log_add(L);
+        w->blk = b;
+        w->old_stamp = g_stamp[b];
+        blk_read(c, b, w->pre);
+        g_stamp[b] = 0;                  /* call again on the next write */
+        return;
+    }
     wlog *w = log_add(L);
     w->blk = b;
     w->old_stamp = g_stamp[b];
@@ -241,11 +287,28 @@ static long g_total_calls, g_total_checked, g_total_bad;
 
 static void dt_call(cpu *c, dt_fn *e, guest_fn port, guest_fn recomp)
 {
-    if (g_recomp) { recomp(c); return; }
+    if (g_recomp || (g_rtrecomp && !e->lifted)) {
+        static int calllog = -1;         /* debugging: DIFFTEST_CALLLOG=1 logs these calls inside a check */
+        if (calllog < 0) calllog = getenv("DIFFTEST_CALLLOG") != NULL;
+        if (calllog && g_depth) {
+            uint32_t a0 = rd32(c, c->esp + 4), a1 = rd32(c, c->esp + 8), ra = rd32(c, c->esp);
+            recomp(c);
+            fprintf(stderr, "CALL %s %08x ret %08x (%08x, %08x) -> %08x\n", g_recomp ? "orig" : "port", e->addr, ra,
+                    a0, a1, c->eax);
+            return;
+        }
+        recomp(c);
+        return;
+    }
     e->calls++;
     g_total_calls++;
     if (!e->enabled || g_depth >= MAXDEPTH) { port(c); return; }
     e->checked++;
+    if (getenv("DIFFTEST_WATCH_RS") && g_depth == 0) {       /* debugging: watch the rule cursor */
+        g_watch = rd32(c, rd32(c, c->esp + 4) + 0x5c) + 0xfc6;
+        g_watch_on = 1;
+        fprintf(stderr, "WATCH_RS %08x\n", g_watch);
+    }
     g_total_checked++;
 
     uint32_t entry = c->esp;
@@ -334,7 +397,14 @@ static void dt_call(cpu *c, dt_fn *e, guest_fn port, guest_fn recomp)
         uint32_t base = L->log[i].blk << WT_BITS;
         for (unsigned k = 0; k < BLK; k++) {
             uint32_t at = base + k;
-            if (ra[k] == rb[k] || (at < entry && at >= entry - 0x01000000u)) continue;
+            if (ra[k] == rb[k]) continue;
+            if (at < entry && at >= entry - 0x01000000u) {
+                /* the scratch below the entry esp: compared only with DIFFTEST_SCRATCH=1 (debugging: the
+                 * uninitialized bytes a later caller reads) */
+                if (!g_scratch) continue;
+                if (nd++ < 6) REPORT("[esp-%x] %02x vs %02x; ", entry - at, ra[k], rb[k]);
+                continue;
+            }
             if (nd++ < 6) REPORT("[%08x] %02x vs %02x; ", at, ra[k], rb[k]);
         }
     }
@@ -374,6 +444,8 @@ static void dt_setup(void)
             }
         }
     }
+    g_rtrecomp = getenv("DIFFTEST_RTRECOMP") != NULL;
+    g_scratch = getenv("DIFFTEST_SCRATCH") != NULL;
     const char *v = getenv("DIFFTEST_VERBOSE");
     if (v) g_verbose_left = atol(v);
     x86_longjmp_hook = lj_hook;

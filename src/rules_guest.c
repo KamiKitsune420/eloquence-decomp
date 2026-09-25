@@ -7,6 +7,7 @@
  */
 #include "rules.h"
 #include "port.h"
+#include "rules_int.h"      /* call_at, call2, call3: calls through the machine */
 
 /* rules.c: the functions that work at a given entry esp */
 uint32_t rl_leave_at(cpu *c, uint32_t sp, uint32_t eng);
@@ -64,15 +65,20 @@ PORT_FN(10131ff0) { rl_push_retry(c, ARG(0), ARG(1)); RET(c->eax); }
 PORT_FN(10132040) { uint32_t eng = ARG(0); rl_push_retry(c, eng, ARG(1)); rl_push_pos(c, eng); RET(c->eax); }
 PORT_FN(101320e0) { rl_push_mark(c, ARG(0), CS_DOWN); RET(c->eax); }
 PORT_FN(10132120) { rl_push_mark(c, ARG(0), CS_UP); RET(c->eax); }
-PORT_FN(101326c0) { uint32_t eng = ARG(0); rl_push_mark(c, eng, CS_DOWN); rl_push_retry(c, eng, ARG(1)); RET(c->eax); }
-PORT_FN(101326e0)
+/* push esi; push eng; call 101320e0; push n; push eng; call 10131ff0 / 10132040 - through the machine, the
+ * second call's arguments below the first one's (the original removes them together) */
+void f_101320e0(cpu *c);
+void f_10131ff0(cpu *c);
+void f_10132040(cpu *c);
+static void push_down_then(cpu *c, guest_fn then, uint32_t ret1, uint32_t ret2)
 {
-    uint32_t eng = ARG(0);
-    rl_push_mark(c, eng, CS_DOWN);
-    rl_push_retry(c, eng, ARG(1));
-    rl_push_pos(c, eng);
-    RET(c->eax);
+    uint32_t eng = ARG(0), n = ARG(1), sp = c->esp - 4;
+    uint32_t a1[1] = { eng };
+    call_at(c, sp, f_101320e0, ret1, 1, a1);
+    call2(c, sp - 4, then, ret2, eng, n);
 }
+PORT_FN(101326c0) { push_down_then(c, f_10131ff0, 0x101326cbu, 0x101326d6u); RET(c->eax); }
+PORT_FN(101326e0) { push_down_then(c, f_10132040, 0x101326ebu, 0x101326f6u); RET(c->eax); }
 PORT_FN(10132ac0) { rl_succeed(c, ARG(0), ARG(1)); RET(c->eax); }
 PORT_FN(101338d0) { rl_commit(c, ARG(0), ARG(1)); RET(c->eax); }
 PORT_FN(101345e0) { rl_set_labels(c, ARG(0), ARG(1), ARG(2)); RET(c->eax); }
@@ -101,12 +107,21 @@ PORT_FN(10133250) { rl_assign_at(c, c->esp, ARG(0), ARG(1), ARG(2)); RET(c->eax)
 PORT_FN(10132be0) { rl_compare_at(c, c->esp, ARG(0), ARG(1), ARG(2), 0x10132c1au); RET(c->eax); }
 PORT_FN(10132b80) { RET(rd8(c, rd32(c, ARG(0) + ENG_RS) + RS_CMP) != 0); }
 PORT_FN(10132ba0) { RET(rd8(c, rd32(c, ARG(0) + ENG_RS) + RS_CMP) == 0); }
+/* push esi; call FUN_10132be0(eng, a, b); call FUN_10132b80(eng) - through the machine, with the original's
+ * registers (esi eng, ecx a, eax b) */
+void f_10132be0(cpu *c);
+void f_10132b80(cpu *c);
 PORT_FN(10132350)
 {
-    uint32_t eng = ARG(0);
-    /* FUN_10132be0 is entered at esp - 0x14 (esi and three arguments pushed) */
-    rl_compare_at(c, c->esp - 0x14, eng, ARG(1), ARG(2), 0x10132c1au);
-    RET(rd8(c, rd32(c, eng + ENG_RS) + RS_CMP) != 0);
+    uint32_t eng = ARG(0), a = ARG(1), b = ARG(2), esi = c->esi, sp = c->esp - 4;
+    c->esi = eng;
+    c->ecx = a;
+    c->eax = b;
+    call3(c, sp, f_10132be0, 0x10132365u, eng, a, b);
+    uint32_t a1[1] = { eng };
+    uint32_t r = call_at(c, sp - 0xc, f_10132b80, 0x1013236bu, 1, a1);
+    c->esi = esi;
+    RET(r);
 }
 PORT_FN(10134280)
 {
@@ -166,8 +181,12 @@ PORT_FN(101360a0)
     uint32_t check = ARG(1), eng = stream_in_arg0(c);
     RET((c->eax & 0xffffff00u) | (uint32_t)rl_next_token(c, eng, (int)check));
 }
-PORT_FN(10134ca0) { RET(!rl_next_token(c, ARG(0), 1)); }
-PORT_FN(10134c80) { RET(!rl_step(c, ARG(0), 0, 1)); }
+/* these two call the stepping functions through the machine, as the original does (its arguments, return
+ * address and the callee's frame are then the original's on the stack) */
+void f_101360a0(cpu *c);
+void f_10135d00(cpu *c);
+PORT_FN(10134ca0) { RET(!(call2(c, c->esp, f_101360a0, 0x10134cacu, ARG(0), 1) & 0xff)); }
+PORT_FN(10134c80) { RET(!(call3(c, c->esp, f_10135d00, 0x10134c8eu, ARG(0), 0, 1) & 0xff)); }
 PORT_FN(10132550) { RET(rl_field_ne_at(c, c->esp, ARG(0), ARG(1), ARG(2), (uint8_t)ARG(3))); }
 PORT_FN(10131da0) { RET(rl_push_field_at(c, c->esp, ARG(0), ARG(1), ARG(2))); }
 PORT_FN(10132c40) { RET(rl_match_string_at(c, c->esp, ARG(0), ARG(1), ARG(2), ARG(3))); }
@@ -185,8 +204,10 @@ PORT_FN(10132f20) { RET(rl_advance_to_a_at(c, c->esp, ARG(0))); }
 
 /* ---------------------------------------------------------------- the value core */
 PORT_FN(10138510) { RET(rl_trail_ref(c, ARG(0), ARG(1))); }
-PORT_FN(10138730) { rl_assign(c, ARG(0), ARG(1), ARG(2)); RET(c->eax); }
-PORT_FN(10138920) { rl_compare(c, ARG(0), ARG(1), ARG(2)); RET(c->eax); }
+void rl_assign_sp(cpu *c, uint32_t sp, uint32_t eng, uint32_t dst, uint32_t src);
+PORT_FN(10138730) { rl_assign_sp(c, c->esp, ARG(0), ARG(1), ARG(2)); RET(c->eax); }
+void rl_compare_sp(cpu *c, uint32_t sp, uint32_t eng, uint32_t a, uint32_t b);
+PORT_FN(10138920) { rl_compare_sp(c, c->esp, ARG(0), ARG(1), ARG(2)); RET(c->eax); }
 PORT_FN(10138b80) { rl_push(c, ARG(0), ARG(1)); RET(c->eax); }
 PORT_FN(10138c60) { RET(rl_pop(c, ARG(0), ARG(1))); }
 PORT_FN(101385f0) { rl_add(c, ARG(0), ARG(1), ARG(2), c->esp + 12); RET(c->eax); }

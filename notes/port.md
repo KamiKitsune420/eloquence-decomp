@@ -171,6 +171,106 @@ DIFFTEST_VERBOSE=n (mismatches printed in full). tools/retuse.py justifies the e
 finds functions that write their argument slots, tools/regress.py runs the whole e2e + eci_compare
 regression in parallel.
 
+### The compiled Delta rules, lifted (tools/delta_lift.py, src/lift.h)
+
+The 999 functions that call `_setjmp3` and rl_enter (0x101315e0) are the compiled Delta rules. delta_lift
+decodes each with x2c's decoder and executes its basic blocks symbolically (esp as an offset from the
+entry, ebp the frame pointer, locals kept at the original's guest addresses because the runtime holds
+pointers into the frame, registers as C expressions, flags as the last flag-setting instruction, join
+variables at control-flow merges). The output is structured C calling the runtime by name (r_enter,
+r_var_init, r_backtrack, ...) and other rules as f_ADDR through the machine at the original's esp
+(lift.h: S(off, ret), lcN). x87 instructions run on the machine's fx80 as x2c emits them. Anything
+outside the model is refused and stays recompiled. Output: src/gen/rules_lifted_NN.c, lifted.h (the
+replace list), lift_rt.h, lift_report.txt (all git-ignored, derived from ENU.SYN).
+
+Regenerate: `python tools/delta_lift.py`, then x2c with `--replace-list src/ported.h --replace-list
+src/gen/lifted.h`, then build_engine.py.
+
+993 of 999 are lifted. The 6 refused (10001001, 100010ff, 10001e05, 100044ff, 10031302, 100c151e) are not
+functions: they are Ghidra entry points inside other functions (10001001 = 10001000 without its `push
+ebp`), reachable only from the address table, never called.
+
+Constructs the lifter handles that needed care (2026-09-25):
+- `push ecx` used as stack filler before an x87 `fstp qword [esp]` (for exp/pow arguments): the register
+  is undefined after a call, so the slot gets the machine's c->ecx (what the original writes too), and at
+  a join an undefined ecx/edx on one path becomes c->ecx. Checked: those values are only ever filler.
+- exp / log / pow: called as imports on the machine (arguments already stored on the stack by the x87,
+  result in st0), the same x87-exact implementations as the recompiled code (x87math.c).
+- `neg ax; sbb eax, eax` (CF = operand != 0), `sar dx, 8` / `imul ax, ax, 3` on 16-bit registers, `and
+  edx, 0xff` after `mov dl, ...` (the mask defines the undefined upper bits), `lea` over a register with
+  undefined upper bits when only its low part is used later.
+
+The machine's registers mirror the original's at every call, setjmp and return (`c->esi = eng;` ... emitted
+only where a value changes; ebx/esi/edi kept across calls, eax/ecx/edx forgotten after one; entry values of
+the callee-saved registers are the constants in_ebx/in_esi/in_edi/in_ebp). Without it the lifted code was
+right but left different stack bytes: a recompiled callee's prologue saves ebx/esi/edi/ebp and MSVC's
+`push ecx` reserves a local with ecx, and the rules copy uninitialized stack bytes into the heap (the tail
+of a value struct that a memset only partly clears), so difftest reported 28 000 mismatches (audio
+unaffected). With the mirroring, and the runtime run recompiled (DIFFTEST_RTRECOMP), the lifted rules
+differ from their originals only where the original itself was wrong (next paragraph).
+
+x2c bug found this way (fixed 2026-09-25): emit_fn writes a function's blocks by address and started
+executing at the lowest one, so a function whose reachable code goes below its entry (68 of 1811: mostly
+Ghidra entries inside other functions, reached by a jump that x2c turns into a tail call, e.g.
+f_100c1948 from FUN_100c151d) ran from the wrong instruction. Now it starts with `goto L_entry`.
+
+Status 2026-09-25 13:54 (993 rules lifted, x2c fixed): regress 195/195 lines + 23/23 ECI scripts x64 and x86
+identical to the real engine; x86 and x64 eloq_run identical on corpus + hard; difftest with
+DIFFTEST_RTRECOMP=1: 436 cases, 7 878 905 checked calls, 0 mismatches. Plain difftest (hand ports in):
+28 418 mismatches in 19 rules, all uninitialized stack bytes the hand-ported runtime leaves differently
+below its esp, copied into the heap by the rules; audio identical in all 436 cases. To remove them the
+hand ports would have to reproduce their originals' scratch writes.
+
+Builds: `ELOQ_MP=2` (env) runs 2 compiler processes instead of 4 - the generated files need ~1 GB each,
+and 4 at once ran the laptop out of memory.
+
+difftest debugging switches (src/difftest.c): DIFFTEST_RTRECOMP=1 runs the hand ports (not the lifted
+rules) as their recompiled originals, so a lifted rule is compared with the same callees on both sides
+(the hand ports leave different scratch below their esp by design); DIFFTEST_WATCH=addr reports every
+write to that address's 256-byte block (writer's esp, the code addresses on the stack above it, and the
+written value on the next line, WROTE); DIFFTEST_WATCH_RS=1 watches the rule cursor (RS + 0xfc6) of the
+checked call; DIFFTEST_CALLLOG=1 logs every hand-ported function's call inside a check on both sides
+(address, return address, two arguments, eax) - diff the orig and port lines to find where they part.
+
+### The hand ports' scratch made exact (in progress, started 2026-09-25)
+
+The rules copy uninitialized stack bytes into the heap, so a hand port must leave below its entry esp the
+bytes its original leaves. DIFFTEST_SCRATCH=1 makes difftest compare that scratch too (reported as
+[esp-N]); run it over the hand ports only:
+`$env:DIFFTEST_SCRATCH="1"; python tools/difftest.py --quick --only <all of ported.h>` - a function's count
+includes its hand-ported callees' scratch, so fix callees first. The recipe, per function (read its
+machine code with tools/pushes.py, tools/disasm.py: pushes, calls, their esp):
+1. the prologue's register saves: generated for every hand port by tools/prologues.py (src/gen/prologues.c,
+   port_prologue called by PORT_FN) - registers pushed at entry, interleaved loads allowed;
+2. saves the original makes later on some path (e.g. rl_enter's push ebx/edi after the early return,
+   rl_goto_a_at's `push ebp` around the stream check): written by hand where they happen;
+3. engine functions the original calls are called through the machine (call2/call3/call_at from
+   rules_int.h, at the original's esp before its pushes, with its return address), not as C functions -
+   the callee's adapter then writes its own frame;
+4. around those calls the machine's registers hold the original's values (callees save them: `esi = eng`
+   and the like, from the listing), restored before returning (the caller's contract).
+Status 2026-09-25 15:00: ~100 of 180 checked hand ports exact (rule frames, cursor goto, sync-variable
+moves, the comparison predicates, push/pop value, trail, ref_at, mark_here, touch, set_token, token_init,
+next_token/step adapters); the quick scratch run went from 4.58M differing checked calls to ~1.3M, and the
+full plain difftest's heap mismatches from 28 418 (19 rules) to 19 944 (8 rules). By 15:30 also exact:
+assign 10133250, set_short 101325e0, compare 10132be0 / 10134280 / 10132350, rl_assign 10138730 (aligned
+frame: prologues.py handles `and esp, -8`; _ftol return addresses and the fild local written) and
+rl_compare 10138920 (rl_compare_sp / rl_assign_sp: the sp-aware versions the adapters use; direct C callers
+pass sp 0 = no stack writes). The full plain difftest still shows 19 944 heap mismatches in 8 rules
+(10031caf, 10031865, 1001ba74, 1001b98d, 100211f4, 1001af8d, 1001feec, 1001ff9b): their garbage comes from
+ports not yet exact - trace with DIFFTEST_WATCH on the stack byte (see the 10031caf analysis above).
+Next: backtrack 101311a0, match_string 10132c40, the synthesizer 1013caf0, start_span 101340f0, the pool
+(10138d60 jumps into 10139c60), the edit functions. Every call now made through the machine is also checked nested, so difftest runs slower.
+
+### The rules rewritten by hand (planned, user's choice 2026-09-25)
+
+"Readable C, same memory": each lifted rule (src/gen/rules_lifted_*.c, generated) is rewritten by hand into
+src/rules/*.c as clear C over the same guest memory - named variables and streams, what the rule matches and
+emits in plain words, the runtime called by name, the register mirroring kept where callees see it - and
+proved bit-exact per rule with difftest (DIFFTEST_RTRECOMP=1 --only <rule>) before it replaces the lifted
+one (a hand-written rule is listed instead of the lifted one; delta_lift then skips it). 993 rules, 255k
+lines lifted: batches per session, largest-called first.
+
 ## Plan
 
 1. ~~Run the whole recompiled engine and compare with ecisay~~ done; more: long texts, several utterances

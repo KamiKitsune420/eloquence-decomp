@@ -8,9 +8,12 @@ files.
 bit-exact on 19,902 recorded frames, `klatt_check`), the frame builder that feeds it (`src/framer.c`,
 parameter tracks to 5 ms frames), the Delta rule runtime (`src/rules*.c`, 212 functions: the streams,
 sync marks, pattern matching and backtracking the rules run on), the ECI API (`src/eci.c`), the runtime and maths.
-Still recompiled from the machine code: the compiled Delta rule modules themselves (text normalization,
-pronunciation, stress, intonation, durations) - these are replaced by hand-written C one function at a time (`x2c --replace`), each checked
-against the recompiled one by `src/difftest.c` (snapshot the machine, run both, compare everything).
+The compiled Delta rule modules themselves (text normalization, pronunciation, stress, intonation,
+durations; 993 functions) are lifted from their machine code into structured C by a tool
+(`tools/delta_lift.py`: generated, not hand-written - they are to be rewritten by hand next), each checked
+against the recompiled original by `src/difftest.c` (snapshot the machine, run both, compare everything).
+The other ~600 functions (the rules' helpers, stream accessors, the front end's plain C code) are still
+recompiled instruction by instruction.
 
 The engine is recompiled from its machine code (`tools/x2c.py`: every x86 instruction becomes C on a
 software x86 with an exact 80-bit x87), the API layer is written by hand from the original's
@@ -22,10 +25,13 @@ decompilation (`notes/eci_api.md`). Everything is checked sample for sample agai
 ## Building (Windows, Visual Studio, from PowerShell)
 
 1. Put your `ECI.DLL`, `ECI.INI` and `ENU.SYN` (MD5 6c39acb7c1f0f62b3cae019f45b224fc) in `pkg/`.
-2. Generate the C: `python tools/x2c.py --tree $(cat build/all_entries.txt) 0x10142e49 -o src/gen/enu.c --split 64 --hook 0x1013caf0`
-   (the entry list comes from the Ghidra export, `ghidra/`) and `python tools/embed_image.py`.
+2. Generate the C: `python tools/delta_lift.py` (the lifted rules, `src/gen/rules_lifted_*.c`),
+   `python tools/x2c.py --tree $(cat build/all_entries.txt) 0x10142e49 -o src/gen/enu.c --split 64 --hook 0x1013caf0 --replace-list src/ported.h --replace-list src/gen/lifted.h`
+   (the entry list comes from the Ghidra export, `ghidra/`), `python tools/embed_image.py` and
+   `python tools/prologues.py`.
 3. `python tools/build_engine.py x64` and/or `python tools/build_engine.py x86`: the engine (64 files,
-   about 10 minutes the first time), `build/<arch>/ECI.DLL`, `eloq_run.exe`, `ecitrace.exe`.
+   about 10 minutes the first time; `$env:ELOQ_MP="2"` compiles 2 files at a time instead of 4 - each
+   needs about 1 GB), `build/<arch>/ECI.DLL`, `eloq_run.exe`, `ecitrace.exe`.
 4. The reference tools (32-bit, they drive the real DLL): `harness\build.bat`.
 
 ## Using it

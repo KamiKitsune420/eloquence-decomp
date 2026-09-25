@@ -24,6 +24,18 @@ void f_10131d70(cpu *c);
 #define AT(x, n) ((x) - 4u * (n) - 4u)
 #define WS(eng) rd32(c, (eng) + ENG_WS)
 
+/* engine functions the ports call through the machine where the original calls them (so that the
+ * arguments, the return address and the callee's frame land on the stack where the original's do; the
+ * callees are hand ports too, entered through their adapters) */
+void f_10131520(cpu *c);    /* rl_ref_at */
+void f_10138b80(cpu *c);    /* rl_push */
+void f_10138c60(cpu *c);    /* rl_pop */
+void f_10138920(cpu *c);    /* rl_compare */
+void f_10138510(cpu *c);    /* rl_trail_ref */
+void f_101314f0(cpu *c);    /* rl_trail_at */
+void f_10138730(cpu *c);    /* rl_assign */
+void f_10130e80(cpu *c);    /* rl_throw */
+
 /* a cdecl call of an engine function with esp at `sp` before the arguments are pushed; `ret` is the
  * original's return address. Returns eax. */
 static inline uint32_t call_at(cpu *c, uint32_t sp, guest_fn f, uint32_t ret, int nargs, const uint32_t *args)
@@ -165,6 +177,8 @@ static inline void cs_sync_off(cpu *c, uint32_t eng)
 uint32_t rl_trail_ref(cpu *c, uint32_t eng, uint32_t ref);
 void     rl_assign(cpu *c, uint32_t eng, uint32_t dst, uint32_t src);
 void     rl_compare(cpu *c, uint32_t eng, uint32_t a, uint32_t b);
+void     rl_compare_sp(cpu *c, uint32_t sp, uint32_t eng, uint32_t a, uint32_t b);
+void     rl_assign_sp(cpu *c, uint32_t sp, uint32_t eng, uint32_t dst, uint32_t src);
 void     rl_push(cpu *c, uint32_t eng, uint32_t ref);
 uint32_t rl_pop(cpu *c, uint32_t eng, uint32_t ref);
 uint32_t rl_mark_key(uint32_t m);

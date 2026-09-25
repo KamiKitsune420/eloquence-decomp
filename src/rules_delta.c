@@ -200,7 +200,20 @@ void rl_token_init(cpu *c, uint32_t sp, uint32_t eng, uint32_t s, uint32_t dst, 
 {
     (void)eng;
     uint32_t d = stream_desc(s & 0xff);
+    uint32_t ebx = c->ebx, esi = c->esi, edi = c->edi, ebp = c->ebp;
+    /* memcpy (msvcrt, through the import at 0x10144134 kept in ebx): its arguments and return address on the
+     * stack as the original pushes them */
+    wr32(c, sp - 0x14, rd32(c, d + SD_TOKEN_SIZE));
+    wr32(c, sp - 0x18, rd32(c, d + SD_DEFAULT));
+    wr32(c, sp - 0x1c, dst);
+    wr32(c, sp - 0x20, 0x101364f0u);
     guest_memmove(c, dst, rd32(c, d + SD_DEFAULT), rd32(c, d + SD_TOKEN_SIZE));
+    /* the setter, entered with the original's registers */
+    c->ebx = rd32(c, 0x10144134u);
+    c->esi = (s & 0xff) * 19;
+    c->edi = dst;
+    c->ebp = src;
+    c->ecx = rd32(c, d + SD_SETTERS);
     uint32_t save = c->esp;
     c->esp = sp - 0x1c;
     push32(c, src);
@@ -209,13 +222,28 @@ void rl_token_init(cpu *c, uint32_t sp, uint32_t eng, uint32_t s, uint32_t dst, 
     x86_icall(c, rd32(c, rd32(c, d + SD_SETTERS)));
     c->esp = save;
     uint32_t sym = rd32(c, d + SD_SYMBOLS);
-    if (!sym) return;
-    int16_t t = (int16_t)rd16(c, rd32(c, d + SD_FIELDS) + FD_TYPE);
-    if (t == T_SYM16)
-        guest_memmove(c, dst, rd32(c, d + SD_SYMBOL_SIZE) * (uint32_t)(int32_t)(int16_t)rd16(c, src) + sym,
-                      rd32(c, d + SD_SYMBOL_COPY));
-    else if (t == T_SYM8)
-        guest_memmove(c, dst, rd32(c, d + SD_SYMBOL_SIZE) * rd8(c, src) + sym, rd32(c, d + SD_SYMBOL_COPY));
+    if (sym) {
+        int16_t t = (int16_t)rd16(c, rd32(c, d + SD_FIELDS) + FD_TYPE);
+        uint32_t from = 0, ret = 0;
+        if (t == T_SYM16) {
+            from = rd32(c, d + SD_SYMBOL_SIZE) * (uint32_t)(int32_t)(int16_t)rd16(c, src) + sym;
+            ret = 0x1013653au;
+        } else if (t == T_SYM8) {
+            from = rd32(c, d + SD_SYMBOL_SIZE) * rd8(c, src) + sym;
+            ret = 0x10136565u;
+        }
+        if (ret) {
+            wr32(c, sp - 0x14, rd32(c, d + SD_SYMBOL_COPY));
+            wr32(c, sp - 0x18, from);
+            wr32(c, sp - 0x1c, dst);
+            wr32(c, sp - 0x20, ret);
+            guest_memmove(c, dst, from, rd32(c, d + SD_SYMBOL_COPY));
+        }
+    }
+    c->ebx = ebx;
+    c->esi = esi;
+    c->edi = edi;
+    c->ebp = ebp;
 }
 
 /* FUN_10136a20: delete the tokens of stream s between mark `left` and mark `right` (FUN_10136e00 does it;

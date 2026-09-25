@@ -324,21 +324,38 @@ void rl_sv_bound(cpu *c, uint32_t sp, uint32_t eng, uint32_t sv, uint32_t s, int
  * (FUN_1013a930) and move it with the given function */
 void rl_sv_move(cpu *c, uint32_t sp, uint32_t eng, uint32_t sv, uint32_t n, int with_eng, uint32_t base)
 {
+    uint32_t esi = c->esi, edi = c->edi;       /* the original's registers across its calls: edi eng, esi sv */
+    c->edi = eng;
+    c->esi = sv;
     if (!(call2(c, sp - 8, f_1013a930, base + 0x10, eng, sv) & 0xff)) rl_throw_at(c, AT(sp - 8, 1), eng);
     uint32_t m = rd32(c, sv);
     wr32(c, sv, with_eng ? call3(c, sp - 8, f_10136240, base + 0x2e, eng, m, n)
                          : call2(c, sp - 8, f_10136200, base + 0x2d, m, n));
+    c->esi = esi;
+    c->edi = edi;
 }
 
 /* FUN_10134960 / 101349c0: resolve A (FUN_1013a9e0, `kind`) and make it a boundary of s. 0, or 1. */
 uint32_t rl_a_bound(cpu *c, uint32_t sp, uint32_t eng, uint32_t s, int kind, int where, uint32_t base)
 {
     uint32_t sv = SV_A(eng);
-    if (call3(c, sp - 8, f_1013a9e0, base + 0x12, eng, sv, (uint32_t)kind)) return 1;
-    uint32_t m = rd32(c, sv);
-    if (!(rd8(c, m + 4 * (rd32(c, RS(eng) + RS_BACK) + (s & 0xff))) & 1))
-        wr32(c, sv, call5(c, sp - 8, f_1013c2d0, base + 0x46, eng, (uint32_t)where, 1, m, s));
-    return 0;
+    uint32_t esi = c->esi, edi = c->edi;       /* the original's registers across its calls: esi eng, edi sv */
+    c->esi = eng;
+    c->edi = sv;
+    uint32_t r = 1;
+    if (!call3(c, sp - 8, f_1013a9e0, base + 0x12, eng, sv, (uint32_t)kind)) {
+        uint32_t m = rd32(c, sv);
+        wr32(c, sp - 0xc, c->ebx);            /* push ebx around the stream check */
+        if (!(rd8(c, m + 4 * (rd32(c, RS(eng) + RS_BACK) + (s & 0xff))) & 1)) {
+            c->ecx = s;                        /* the callee's `push ecx` saves these */
+            c->eax = m;
+            wr32(c, sv, call5(c, sp - 8, f_1013c2d0, base + 0x46, eng, (uint32_t)where, 1, m, s));
+        }
+        r = 0;
+    }
+    c->esi = esi;
+    c->edi = edi;
+    return r;
 }
 
 /* FUN_10134a20 / 10134a60: resolve A (FUN_1013a960) and move it (FUN_10136200 / FUN_10136240). 0, or 1.
@@ -346,10 +363,20 @@ uint32_t rl_a_bound(cpu *c, uint32_t sp, uint32_t eng, uint32_t s, int kind, int
 uint32_t rl_a_move(cpu *c, uint32_t sp, uint32_t eng, uint32_t n, int with_eng, uint32_t r1, uint32_t r2)
 {
     uint32_t sv = SV_A(eng);
-    if (call3(c, sp - 4, f_1013a960, r1, eng, sv, 0)) return 1;
-    uint32_t m = rd32(c, sv);
-    wr32(c, sv, with_eng ? call3(c, sp - 4, f_10136240, r2, eng, m, n) : call2(c, sp - 4, f_10136200, r2, m, n));
-    return 0;
+    /* the original keeps sv in esi across its calls; FUN_10134a60 also saves edi and keeps eng in it (its
+     * calls are 4 bytes lower) */
+    uint32_t esi = c->esi, edi = c->edi, csp = with_eng ? sp - 8 : sp - 4;
+    c->esi = sv;
+    if (with_eng) c->edi = eng;
+    uint32_t r = 1;
+    if (!call3(c, csp, f_1013a960, r1, eng, sv, 0)) {
+        uint32_t m = rd32(c, sv);
+        wr32(c, sv, with_eng ? call3(c, csp, f_10136240, r2, eng, m, n) : call2(c, csp, f_10136200, r2, m, n));
+        r = 0;
+    }
+    c->esi = esi;
+    c->edi = edi;
+    return r;
 }
 
 /* FUN_10134aa0 / 10134b00: val := the sync variable (resolved by FUN_1013a840; trailed). Returns eax. */
@@ -606,8 +633,17 @@ uint32_t rl_val_call(cpu *c, uint32_t sp, uint32_t eng, uint32_t a, uint32_t val
 void rl_set_token(cpu *c, uint32_t sp, uint32_t eng, uint32_t val)
 {
     uint32_t eax = RS(eng);
-    if (rd8(c, eax + RS_TRAIL)) eax = rl_trail_at(c, AT(sp - 8, 2), eng, val);
-    call4(c, sp - 8, f_101364c0, 0x10133243u, eng, (eax & 0xffffff00u) | rd8(c, val), val + 4, sp + 12);
+    uint32_t esi = c->esi, edi = c->edi;    /* the original: esi eng, edi val across its calls */
+    c->esi = eng;
+    c->edi = val;
+    if (rd8(c, eax + RS_TRAIL)) eax = call2(c, sp - 8, f_101314f0, 0x1013322eu, eng, val);
+    eax = (eax & 0xffffff00u) | rd8(c, val);
+    c->eax = eax;                           /* the registers the callee's prologue may save */
+    c->ecx = sp + 12;
+    c->edx = val + 4;
+    call4(c, sp - 8, f_101364c0, 0x10133243u, eng, eax, val + 4, sp + 12);
+    c->esi = esi;
+    c->edi = edi;
 }
 
 /* FUN_101331c0: FUN_10141b30(eng, a, b, 1) */
