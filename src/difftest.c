@@ -304,6 +304,7 @@ static void dt_call(cpu *c, dt_fn *e, guest_fn port, guest_fn recomp)
     g_total_calls++;
     if (!e->enabled || g_depth >= MAXDEPTH) { port(c); return; }
     e->checked++;
+    if (g_watch_on > 0) fprintf(stderr, "CHECK %08x call %ld\n", e->addr, e->calls);
     if (getenv("DIFFTEST_WATCH_RS") && g_depth == 0) {       /* debugging: watch the rule cursor */
         g_watch = rd32(c, rd32(c, c->esp + 4) + 0x5c) + 0xfc6;
         g_watch_on = 1;
@@ -402,7 +403,7 @@ static void dt_call(cpu *c, dt_fn *e, guest_fn port, guest_fn recomp)
                 /* the scratch below the entry esp: compared only with DIFFTEST_SCRATCH=1 (debugging: the
                  * uninitialized bytes a later caller reads) */
                 if (!g_scratch) continue;
-                if (nd++ < 6) REPORT("[esp-%x] %02x vs %02x; ", entry - at, ra[k], rb[k]);
+                if (nd++ < 6) REPORT("[esp-%x=%08x] %02x vs %02x; ", entry - at, at, ra[k], rb[k]);
                 continue;
             }
             if (nd++ < 6) REPORT("[%08x] %02x vs %02x; ", at, ra[k], rb[k]);

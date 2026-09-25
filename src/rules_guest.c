@@ -35,8 +35,8 @@ void     rl_set_ab(cpu *c, uint32_t eng, uint32_t a, uint32_t b);
 void     rl_set_a(cpu *c, uint32_t eng, uint32_t v);
 void     rl_set_b(cpu *c, uint32_t eng, uint32_t v);
 uint32_t rl_advance_to_a_at(cpu *c, uint32_t sp, uint32_t eng);
-uint32_t rl_align(cpu *c, uint32_t eng, uint32_t label, uint32_t n, uint32_t streams);
-uint32_t rl_align1(cpu *c, uint32_t eng, uint32_t label, uint32_t s);
+uint32_t rl_align(cpu *c, uint32_t sp, uint32_t eng, uint32_t label, uint32_t n, uint32_t streams);
+uint32_t rl_align1(cpu *c, uint32_t sp, uint32_t eng, uint32_t label, uint32_t s);
 void     rl_mark_here_at(cpu *c, uint32_t sp, uint32_t eng, uint32_t label, uint32_t val);
 void     rl_succeed(cpu *c, uint32_t eng, uint32_t label);
 void     rl_commit(cpu *c, uint32_t eng, uint32_t label);
@@ -83,8 +83,8 @@ PORT_FN(10132ac0) { rl_succeed(c, ARG(0), ARG(1)); RET(c->eax); }
 PORT_FN(101338d0) { rl_commit(c, ARG(0), ARG(1)); RET(c->eax); }
 PORT_FN(101345e0) { rl_set_labels(c, ARG(0), ARG(1), ARG(2)); RET(c->eax); }
 PORT_FN(10133300) { rl_mark_here_at(c, c->esp, ARG(0), ARG(1), ARG(2)); RET(c->eax); }
-PORT_FN(10132f80) { RET(rl_align(c, ARG(0), ARG(1), ARG(2), ARG(3))); }
-PORT_FN(10134b60) { RET(rl_align1(c, ARG(0), ARG(1), ARG(2))); }
+PORT_FN(10132f80) { RET(rl_align(c, c->esp, ARG(0), ARG(1), ARG(2), ARG(3))); }
+PORT_FN(10134b60) { RET(rl_align1(c, c->esp, ARG(0), ARG(1), ARG(2))); }
 PORT_FN(10132160)
 {
     uint32_t a = ARG(0);
@@ -303,8 +303,18 @@ PORT_FN(10134a20) { RET(rl_a_move(c, SP, ARG(0), ARG(1), 0, 0x10134a31u, 0x10134
 PORT_FN(10134a60) { RET(rl_a_move(c, SP, ARG(0), ARG(1), 1, 0x10134a72u, 0x10134a87u)); }
 PORT_FN(10134aa0) { RET(rl_get_sv(c, SP, ARG(0), ARG(0) + ENG_SYNC_A, ARG(1), 0x10134aa0u)); }
 PORT_FN(10134b00) { RET(rl_get_sv(c, SP, ARG(0), ARG(0) + ENG_SYNC_B, ARG(1), 0x10134b00u)); }
-PORT_FN(10134d90) { uint32_t eng = ARG(0); rl_mark_set(c, eng, rd32(c, eng + ENG_SYNC_A), ARG(1), 1); RET(c->eax); }
-PORT_FN(10134db0) { uint32_t eng = ARG(0); rl_mark_set(c, eng, rd32(c, eng + ENG_SYNC_A), ARG(1), 0); RET(c->eax); }
+/* FUN_10135a40 / 10135a60 (eng, A, s) through the machine, as the original calls them (eax eng, ecx A) */
+void f_10135a40(cpu *c);
+void f_10135a60(cpu *c);
+static void mark_set_a(cpu *c, guest_fn f, uint32_t ret)
+{
+    uint32_t eng = ARG(0), s = ARG(1), a = rd32(c, eng + ENG_SYNC_A);
+    c->eax = eng;
+    c->ecx = a;
+    call3(c, c->esp, f, ret, eng, a, s);
+}
+PORT_FN(10134d90) { mark_set_a(c, f_10135a40, 0x10134da3u); RET(c->eax); }
+PORT_FN(10134db0) { mark_set_a(c, f_10135a60, 0x10134dc3u); RET(c->eax); }
 PORT_FN(10135a40) { rl_mark_set(c, ARG(0), ARG(1), ARG(2), 1); RET(c->eax); }
 PORT_FN(10135a60) { rl_mark_set(c, ARG(0), ARG(1), ARG(2), 0); RET(c->eax); }
 

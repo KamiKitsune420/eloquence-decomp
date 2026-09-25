@@ -35,6 +35,13 @@ void f_10138510(cpu *c);    /* rl_trail_ref */
 void f_101314f0(cpu *c);    /* rl_trail_at */
 void f_10138730(cpu *c);    /* rl_assign */
 void f_10130e80(cpu *c);    /* rl_throw */
+void f_10135d00(cpu *c);    /* rl_step */
+void f_10134690(cpu *c);    /* rl_set_a */
+void f_10135b20(cpu *c);    /* a stream's field type */
+void f_10136a20(cpu *c);    /* rl_delete_range */
+void f_101364c0(cpu *c);    /* rl_token_init */
+void f_10138d40(cpu *c);    /* pool_alloc for a stream's token */
+void f_101360a0(cpu *c);    /* rl_next_token */
 
 /* a cdecl call of an engine function with esp at `sp` before the arguments are pushed; `ret` is the
  * original's return address. Returns eax. */

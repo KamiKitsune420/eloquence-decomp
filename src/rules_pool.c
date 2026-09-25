@@ -56,6 +56,7 @@ uint32_t pool_chunk_new(cpu *c, uint32_t sp, uint32_t eng, uint32_t size)
         return ch;
     }
     uint32_t n = 0x18;
+    wr32(c, sp - 0x10, c->edi);             /* push edi (saved only on this path) */
     ch = import_call(c, sp - 0x10, IAT_MALLOC, 0x1013a13fu, 1, &n);
     if (!ch) return 0;
     wr32(c, ch + CH_NEXT, 0);
@@ -101,6 +102,10 @@ uint32_t pool_init(cpu *c, uint32_t sp, uint32_t eng, uint32_t size)
 /* FUN_10139b80 (fastcall): an element of `size` bytes (0 if out of memory) */
 uint32_t pool_alloc(cpu *c, uint32_t sp, uint32_t eng, int32_t size)
 {
+    /* its saves (also when entered by the tail jump from FUN_10138d40, which has no prologue of its own) */
+    wr32(c, sp - 4, c->ebx);
+    wr32(c, sp - 8, c->esi);
+    wr32(c, sp - 0xc, c->edi);
     uint32_t ch = rd32(c, WS(eng) + WS_POOL_CUR);
     int32_t n = size + 4;
     uint32_t p;
@@ -114,7 +119,16 @@ uint32_t pool_alloc(cpu *c, uint32_t sp, uint32_t eng, int32_t size)
             p = rd32(c, ch + CH_END) - used;
         } else {
             wr32(c, ch + CH_USED, used - (uint32_t)n);
+            /* the original's registers at the call: ebx eng, esi the chunk, edi n, ecx the size */
+            uint32_t ebx = c->ebx, esi = c->esi, edi = c->edi;
+            c->ebx = eng;
+            c->esi = ch;
+            c->edi = (uint32_t)n;
+            c->ecx = rd32(c, WS(eng) + WS_POOL_SIZE);
             uint32_t nc = chunk_new_at(c, sp - 0xc, eng, rd32(c, WS(eng) + WS_POOL_SIZE), 0x10139bd1u);
+            c->ebx = ebx;
+            c->esi = esi;
+            c->edi = edi;
             wr32(c, ch + CH_NEXT, nc);
             if (!nc) {
                 p = 0;
@@ -141,6 +155,7 @@ uint32_t pool_alloc(cpu *c, uint32_t sp, uint32_t eng, int32_t size)
  * cache (up to 10) or is freed. Returns the original's eax. */
 uint32_t pool_free(cpu *c, uint32_t sp, uint32_t eng, uint32_t e)
 {
+    wr32(c, sp - 4, c->esi);                /* push esi (also when entered by FUN_10138d60's tail jump) */
     uint32_t ch = rd32(c, e - 4);
     uint32_t n = rd32(c, ch + CH_COUNT) - 1;
     wr32(c, ch + CH_COUNT, n);
@@ -164,6 +179,7 @@ uint32_t pool_free(cpu *c, uint32_t sp, uint32_t eng, uint32_t e)
     wr32(c, rd32(c, ch + CH_PREV) + CH_NEXT, rd32(c, ch + CH_NEXT));
     uint32_t nx = rd32(c, ch + CH_NEXT);
     if (nx) wr32(c, nx, rd32(c, ch + CH_PREV));
+    wr32(c, sp - 8, c->edi);                /* push edi (the import's address is kept in it) */
     free_at(c, sp - 8, rd32(c, ch + CH_DATA), 0x10139ce1u);
     return free_at(c, sp - 0xc, ch, 0x10139ce4u);
 }
@@ -172,6 +188,10 @@ uint32_t pool_free(cpu *c, uint32_t sp, uint32_t eng, uint32_t e)
 void pool_reset(cpu *c, uint32_t sp, uint32_t eng)
 {
     uint32_t ch = rd32(c, WS(eng) + WS_POOL_FIRST);
+    if (ch) {                               /* push ebx; push ebp (the loop's registers) */
+        wr32(c, sp - 0xc, c->ebx);
+        wr32(c, sp - 0x10, c->ebp);
+    }
     while (ch) {
         uint32_t next = rd32(c, ch + CH_NEXT);
         free_at(c, sp - 0x10, rd32(c, ch + CH_DATA), 0x10139d14u);
@@ -179,7 +199,12 @@ void pool_reset(cpu *c, uint32_t sp, uint32_t eng)
         ch = next;
     }
     uint32_t size = rd32(c, WS(eng) + WS_POOL_SIZE);
+    uint32_t esi = c->esi, edi = c->edi;    /* the original: edi eng, esi the size */
+    c->edi = eng;
+    c->esi = size;
     uint32_t nc = chunk_new_at(c, sp - 8, eng, size, 0x10139d32u);
+    c->esi = esi;
+    c->edi = edi;
     wr32(c, WS(eng) + WS_POOL_FIRST, nc);
     uint32_t ws = WS(eng);
     wr32(c, ws + WS_POOL_CUR, rd32(c, ws + WS_POOL_FIRST));

@@ -257,6 +257,7 @@ uint32_t rl_delete_range(cpu *c, uint32_t sp, uint32_t eng, uint32_t s, uint32_t
     ws = WS(eng);
     int32_t si = (int8_t)rd8(c, ws + 0x46);
     uint32_t e = rd32(c, rd32(c, ws + 0x3e) + 4 * (rd32(c, RS(eng) + RS_BACK) + (uint32_t)si)) & ~3u;
+    if (e) wr32(c, sp - 0xc, c->ebx);       /* push ebx around the mark test */
     if (e && !is_mark(c, e)) e = rd32(c, e + 4) & ~3u;
     wr32(c, ws + 0x36, e);
     ws = WS(eng);
@@ -271,12 +272,32 @@ uint32_t rl_delete_range(cpu *c, uint32_t sp, uint32_t eng, uint32_t s, uint32_t
         e = rd32(c, rd32(c, ws + 0x3e) + 4 * (rd32(c, RS(eng) + RS_BACK) + (uint32_t)si)) & ~3u;
         if (e && is_mark(c, e)) return (eng & 0xffffff00u) | 1;
         uint32_t args[4] = { eng, e, e, 0 };
-        return (call_at(c, sp - 8, f_10136e00, 0x10136ad6u, 4, args) & 0xffffff00u) | 1;
+        /* the original's registers: edi the backward-link index, esi the rule state */
+        uint32_t esi = c->esi, edi = c->edi;
+        c->edi = rd32(c, RS(eng) + RS_BACK);
+        c->esi = RS(eng);
+        c->eax = eng;
+        c->ecx = e;
+        c->edx = rd32(c, RS(eng) + RS_BACK) + (uint32_t)si;
+        uint32_t r = call_at(c, sp - 8, f_10136e00, 0x10136ad6u, 4, args);
+        c->esi = esi;
+        c->edi = edi;
+        return (r & 0xffffff00u) | 1;
     }
     uint32_t a = rd32(c, rd32(c, ws + 0x42) + 0xc + 4 * (uint32_t)si) & ~3u;
     uint32_t b = rd32(c, rd32(c, ws + 0x3e) + 4 * (rd32(c, RS(eng) + RS_BACK) + (uint32_t)si)) & ~3u;
     uint32_t args[4] = { eng, b, a, 0 };
-    return (call_at(c, sp - 8, f_10136e00, 0x10136b03u, 4, args) & 0xffffff00u) | 1;
+    /* the original's registers: edi the backward-link index, esi that index + s */
+    uint32_t esi = c->esi, edi = c->edi;
+    c->edi = rd32(c, RS(eng) + RS_BACK);
+    c->esi = rd32(c, RS(eng) + RS_BACK) + (uint32_t)si;
+    c->eax = eng;
+    c->ecx = b;
+    c->edx = rd32(c, ws + 0x3e);
+    uint32_t r = call_at(c, sp - 8, f_10136e00, 0x10136b03u, 4, args);
+    c->esi = esi;
+    c->edi = edi;
+    return (r & 0xffffff00u) | 1;
 }
 
 /* FUN_10136570: insert a token of stream s between mark `left` and mark `right` (deleting what is between
@@ -288,21 +309,44 @@ uint32_t rl_insert_token(cpu *c, uint32_t sp, uint32_t eng, uint32_t s, uint32_t
 {
     wr32(c, rd32(c, eng + ENG_OUT) + 0x1b5, 1);
     uint32_t si = s & 0xff;
+    /* the original's registers across its calls: ebp eng, ebx right, esi s & 0xff, edi left */
+    uint32_t ebx = c->ebx, esi = c->esi, edi = c->edi, ebp = c->ebp, r = 0;
+    c->ebp = eng;
+    c->ebx = right;
+    c->esi = si;
+    c->edi = left;
     if ((rd32(c, right + 4 * (rd32(c, RS(eng) + RS_BACK) + si)) & ~3u) != left
-        || (rd32(c, left + 4 * si + 0xc) & ~3u) != right)
-        rl_delete_range(c, AT(sp - 0x10, 4), eng, s, right, left);
+        || (rd32(c, left + 4 * si + 0xc) & ~3u) != right) {
+        uint32_t args[4] = { eng, s, right, left };
+        c->eax = s;
+        call_at(c, sp - 0x10, f_10136a20, 0x101365c2u, 4, args);
+    }
     if (argslot) wr32(c, argslot, 19 * si);
+    c->ecx = stream_desc(si);
     uint32_t tok = call2(c, sp - 0x10, f_10138d40, 0x101365ddu, eng, stream_desc(si));
-    if (!tok) return 0;
-    set_link(c, right + 4 * (rd32(c, RS(eng) + RS_BACK) + si), tok);
-    set_link(c, left + 4 * si + 0xc, tok);
-    wr32(c, tok + 4, left);
-    wr32(c, tok, right);
-    if ((int16_t)rd16(c, ref + 4) >= 0) copy(c, tok + 8, rd32(c, ref), rd32(c, stream_desc(si) + SD_TOKEN_SIZE));
-    else rl_token_init(c, AT(sp - 0x10, 4), eng, s, tok + 8, rd32(c, ref));
-    wr32(c, rd32(c, eng + ENG_OUT) + 0x1b5, 1);
-    wr32(c, RS(eng) + 0x1146, 0);
-    return 1;
+    if (tok) {
+        set_link(c, right + 4 * (rd32(c, RS(eng) + RS_BACK) + si), tok);
+        set_link(c, left + 4 * si + 0xc, tok);
+        wr32(c, tok + 4, left);
+        wr32(c, tok, right);
+        if ((int16_t)rd16(c, ref + 4) >= 0) {
+            copy(c, tok + 8, rd32(c, ref), rd32(c, stream_desc(si) + SD_TOKEN_SIZE));
+        } else {
+            uint32_t args[4] = { eng, s, tok + 8, rd32(c, ref) };
+            c->eax = tok + 8;
+            c->ecx = rd32(c, ref);
+            c->edx = s;
+            call_at(c, sp - 0x10, f_101364c0, 0x10136652u, 4, args);
+        }
+        wr32(c, rd32(c, eng + ENG_OUT) + 0x1b5, 1);
+        wr32(c, RS(eng) + 0x1146, 0);
+        r = 1;
+    }
+    c->ebx = ebx;
+    c->esi = esi;
+    c->edi = edi;
+    c->ebp = ebp;
+    return r;
 }
 
 /* FUN_10135c70: empty stream s (all its tokens between the delta's start and end), and if the stream

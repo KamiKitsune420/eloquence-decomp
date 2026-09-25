@@ -162,6 +162,7 @@ void ring_flags(cpu *c, uint32_t eng, uint32_t m)
             p++;
         } while (b > -1);
     }
+    uint32_t ecx = p;                       /* the original leaves ecx where its scans stopped */
     int32_t i = (int32_t)rd8(c, eng + ENG_NSTREAMS) - 1;
     if (i >= 0) {
         uint32_t rs = RS(eng);
@@ -174,7 +175,9 @@ void ring_flags(cpu *c, uint32_t eng, uint32_t m)
             }
             if (n > 1 && !marked) break;
         }
+        ecx = a;
     }
+    c->ecx = ecx;
     uint32_t w = rd32(c, m + 4);
     w = n == 1 ? w | 1 : w & ~1u;
     wr32(c, m + 4, w);
@@ -377,14 +380,19 @@ uint32_t delete_run(cpu *c, uint32_t sp, uint32_t eng, uint32_t from, uint32_t t
     uint32_t outer = w & ~3u;
     wr32(c, sp + 4, outer);
     uint32_t e = from, next;
+    /* the original's registers at its calls: esi the element, edi eng, ebx the next one, ebp the link
+     * it just cleared (or the ring link it fixed), else what it held before */
+    uint32_t ebx = c->ebx, esi = c->esi, edi = c->edi, ebp = c->ebp, r_ebp = ebp;
+#define DR_RETURN(v) do { c->ebx = ebx; c->esi = esi; c->edi = edi; c->ebp = ebp; return (v); } while (0)
     for (;;) {
-        if (!e) return 0;
+        if (!e) DR_RETURN(0);
         if (is_mark(c, e)) {
             int32_t si = (int8_t)rd8(c, WS(eng) + 0x46);
             uint32_t a = e + 4 * ((uint32_t)si + rd32(c, RS(eng) + RS_BACK));
             uint32_t lw = rd32(c, a);
             uint8_t flags = rd8(c, e + 4);
             next = lw & ~3u;
+            r_ebp = a;
             wr32(c, a, lw & ~1u);
             si = (int8_t)rd8(c, WS(eng) + 0x46);
             wr32(c, e + 0xc + 4 * (uint32_t)si, rd32(c, e + 0xc + 4 * (uint32_t)si) & 3);
@@ -392,6 +400,11 @@ uint32_t delete_run(cpu *c, uint32_t sp, uint32_t eng, uint32_t from, uint32_t t
             a = e + 4 * ((uint32_t)si + rd32(c, RS(eng) + RS_BACK));
             wr32(c, a, rd32(c, a) & 3);
             if (!(flags & 1)) {
+                c->esi = e;
+                c->edi = eng;
+                c->ebx = next;
+                c->ebp = r_ebp;
+                c->ecx = 1;
                 call2(c, sp - 0x10, f_10136970, 0x10136ef6u, eng, e);
                 uint32_t sb = (c->ecx & 0xffffff00u) | rd8(c, WS(eng) + 0x46);
                 call3(c, sp - 0x18, f_10136fa0, 0x10136f04u, eng, e, sb);
@@ -402,17 +415,27 @@ uint32_t delete_run(cpu *c, uint32_t sp, uint32_t eng, uint32_t from, uint32_t t
                 uint32_t off = 4 * rd32(c, rs + RS_BACK) - 8;
                 uint32_t rn = rd32(c, e + 4) & ~3u, pv = rd32(c, off + e) & ~3u;
                 set_link(c, off + rn, pv);
+                r_ebp = rd32(c, off + rn);
                 set_link(c, pv + 4, rn);
                 wr32(c, RING_COUNT, rd32(c, RING_COUNT) + 1);
             }
         } else {
             next = rd32(c, e + 4) & ~3u;
         }
+        c->esi = e;
+        c->edi = eng;
+        c->ebx = next;
+        c->ebp = r_ebp;
         call3(c, sp - 0x10, f_10138d60, 0x10136f18u, eng, e, 0);
     step:
         if (e == to) break;
         e = next;
     }
+    c->ebx = ebx;
+    c->esi = esi;
+    c->edi = edi;
+    c->ebp = ebp;
+#undef DR_RETURN
     outer = rd32(c, sp + 4);
     if (outer && is_mark(c, outer)) {
         set_link(c, outer + 4 * ((uint32_t)(int32_t)(int8_t)rd8(c, WS(eng) + 0x46) + rd32(c, RS(eng) + RS_BACK)), next);
