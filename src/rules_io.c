@@ -102,41 +102,73 @@ static uint32_t guest_strlen(cpu *c, uint32_t a)
  * of the line. al: the word's last character; '\n' for an empty line, 0 at the end of the input or for
  * an unmatched quote (then buf may be unterminated, as in the original). The flag is left in the
  * argument slot of s (the original keeps it there). */
+/* the registers and locals FUN_10138080 has at its calls (its callees save ebx, esi, edi, ebp): ebx the
+ * escape value being built, else its upper bytes with the quoted flag in bl; ebp the output pointer. The
+ * flags are its locals at sp - 7 (quoted), sp - 6 (got), sp - 5 (numeric), 19 s at sp - 4. */
+typedef struct {
+    uint32_t sp, ebx;          /* ebx: what the original's ebx holds between escapes */
+    uint8_t quoted;
+} rw_state;
+
+static void rw_quoted(cpu *c, rw_state *st, uint8_t q)
+{
+    st->quoted = q;
+    wr8(c, st->sp - 7, q);
+    st->ebx = (st->ebx & 0xffffff00u) | q;
+}
+
 static uint32_t read_word(cpu *c, uint32_t sp, uint32_t eng, uint32_t s, uint32_t ch, uint32_t buf)
 {
     const uint32_t at = sp - 24;        /* esp at the calls */
+    uint32_t ebx0 = c->ebx, esi0 = c->esi, edi0 = c->edi, ebp0 = c->ebp, r;
+    rw_state st = { sp, ebx0 & 0xffffff00u, 0 };
     uint32_t desc = stream_desc(s & 0xff);
     uint8_t single = rd32(c, desc + SD_SINGLE) == 1;
     wr8(c, sp + 8, single);
+    wr8(c, sp - 7, 0);
+    wr8(c, sp - 6, 0);
+    wr32(c, sp - 4, (s & 0xff) * 19);
     uint8_t quoted = 0, got = 0;
+    c->ebx = st.ebx;
+    c->esi = s;
     int16_t t = (int16_t)call1(c, at, f_10135b20, 0x101380b9u, s);
     uint8_t numeric = t == T_SHORT;
     if (!numeric) numeric = (int16_t)call1(c, at, f_10135b20, 0x101380c8u, s) == T_INT;
     if (!numeric) numeric = (int16_t)call1(c, at, f_10135b20, 0x101380d7u, s) == T_DOUBLE;
+    wr8(c, sp - 5, numeric);
     int32_t qopen = (int8_t)rd8(c, desc + SD_QUOTE_OPEN), qclose = (int8_t)rd8(c, desc + SD_QUOTE_CLOSE);
     uint32_t p = buf;
+    c->esi = eng;
+    c->edi = ch;
+#define RW_GETC(ret) (c->ebx = st.ebx, c->ebp = p, (int32_t)call2(c, at, f_10141e00, (ret), eng, ch))
+#define RW_UNGETC(ret) (c->ebx = st.ebx, c->ebp = p, call2(c, at, f_10141e80, (ret), eng, ch))
+#define RW_RETURN(v) do { r = (v); goto out; } while (0)
     for (;;) {
-        int32_t k = (int32_t)call2(c, at, f_10141e00, 0x101380fcu, eng, ch);
+        int32_t k = RW_GETC(0x101380fcu);
         uint32_t v;
         if (k == '\\') {
-            k = (int32_t)call2(c, at, f_10141e00, 0x1013810fu, eng, ch);
+            k = RW_GETC(0x1013810fu);
             if (k >= '0' && k <= '7') {
                 v = 0;
+                st.ebx = 0;
                 while (k >= '0' && k <= '7') {
                     v = v * 8 + (uint32_t)k - '0';
-                    k = (int32_t)call2(c, at, f_10141e00, 0x1013813bu, eng, ch);
+                    st.ebx = v;
+                    k = RW_GETC(0x1013813bu);
                 }
-                call2(c, at, f_10141e80, 0x101381f7u, eng, ch);
+                RW_UNGETC(0x101381f7u);
             } else if (k == 'x' || k == 'X') {
                 v = 0;
+                st.ebx = 0;
                 for (;;) {
-                    k = (int32_t)call2(c, at, f_10141e00, 0x101381a5u, eng, ch);
+                    k = RW_GETC(0x101381a5u);
                     if (k >= '0' && k <= '9') v = v * 16 + (uint32_t)k - 0x30;
                     else if (k >= 'a' && k <= 'f') v = v * 16 + (uint32_t)k - 0x57;
                     else if (k >= 'A' && k <= 'F') v = v * 16 + (uint32_t)k - 0x37;
                     else break;
+                    st.ebx = v;
                 }
-                call2(c, at, f_10141e80, 0x101381f7u, eng, ch);
+                RW_UNGETC(0x101381f7u);
             } else {
                 switch (k) {
                 case 'a': v = 7; break;
@@ -149,44 +181,60 @@ static uint32_t read_word(cpu *c, uint32_t sp, uint32_t eng, uint32_t s, uint32_
                 default: v = (uint32_t)k; break;
                 }
             }
+            st.ebx = (v & 0xffffff00u) | quoted;    /* movsx eax, bl; mov bl, [quoted] */
         } else if (k == '\n') {
             if (quoted) {
-                if (!single) return 0;
+                if (!single) RW_RETURN(0);
                 wr8(c, p++, (uint8_t)qopen);
                 wr8(c, p, 0);
-                return rd8(c, p - 1);
+                RW_RETURN(rd8(c, p - 1));
             }
             wr8(c, p, 0);
-            if (!got) return '\n';
-            call2(c, at, f_10141e80, 0x101382dfu, eng, ch);
-            return rd8(c, p - 1);
+            if (!got) RW_RETURN('\n');
+            RW_UNGETC(0x101382dfu);
+            RW_RETURN(rd8(c, p - 1));
         } else if (k == -1 || k == 0) {
             wr8(c, p, 0);
-            return (uint32_t)k & ~0xffu;
+            RW_RETURN((uint32_t)k & ~0xffu);
         } else if (k == qopen) {
-            if (!quoted) { quoted = 1; continue; }
-            if (k != qclose) return 0;
+            if (!quoted) {
+                quoted = 1;
+                rw_quoted(c, &st, 1);
+                continue;
+            }
+            if (k != qclose) RW_RETURN(0);
             wr8(c, p, 0);
-            return rd8(c, p - 1);
+            RW_RETURN(rd8(c, p - 1));
         } else if (k == qclose) {
-            if (!quoted) return 0;
+            if (!quoted) RW_RETURN(0);
             wr8(c, p, 0);
-            return rd8(c, p - 1);
+            RW_RETURN(rd8(c, p - 1));
         } else {
             if (k == ' ' && !single && !quoted) {
                 if (!got) continue;
                 wr8(c, p, 0);
-                return 0x20;
+                RW_RETURN(0x20);
             }
             v = (uint32_t)k;
         }
         wr8(c, p++, (uint8_t)v);
-        if (numeric || !single) got = 1;
-        else if (!quoted) {
+        if (numeric || !single) {
+            got = 1;
+            wr8(c, sp - 6, 1);
+        } else if (!quoted) {
             wr8(c, p, 0);
-            return rd8(c, p - 1);
+            RW_RETURN(rd8(c, p - 1));
         }
     }
+out:
+#undef RW_GETC
+#undef RW_UNGETC
+#undef RW_RETURN
+    c->ebx = ebx0;
+    c->esi = esi0;
+    c->edi = edi0;
+    c->ebp = ebp0;
+    return r;
 }
 
 /* ------------------------------------------------------------------------------------- reading a value */
@@ -281,13 +329,35 @@ static int double_word(cpu *c, uint32_t sp0, uint32_t p)
  * reported and read again. After the word the rest of the line's newline is consumed. 0 when read; 1 at
  * the end of the input or on a stop request (the output's state cleared) or when the error handling
  * gives up. The frame (0x1c8 bytes + 4 registers) holds the word at +0x2c and the values. */
-static uint32_t read_value(cpu *c, uint32_t sp, uint32_t eng, uint32_t ch, uint32_t ref)
+/* where the original's inlined strcmp leaves its second pointer (esi): it compares two bytes a step */
+static uint32_t strcmp_end(cpu *c, uint32_t a, uint32_t b)
+{
+    for (;;) {
+        uint8_t x = rd8(c, a);
+        if (x != rd8(c, b) || !x) return b;
+        x = rd8(c, a + 1);
+        if (x != rd8(c, b + 1)) return b;
+        a += 2;
+        b += 2;
+        if (!x) return b;
+    }
+}
+
+static uint32_t read_value_body(cpu *c, uint32_t sp, uint32_t eng, uint32_t ch, uint32_t ref)
 {
     const uint32_t sp0 = sp - 0x1d8;    /* the original's esp in the body */
     const uint32_t word = sp0 + 0x2c, vptr = sp0 + 0x18;
     wr8(c, sp0 + 0x14, rd8(c, ref + 4));
+    /* the original keeps eng in ebx and the stream (its local, a whole dword) in esi across its calls */
+    c->ebx = eng;
+    /* esi at the tail calls (edi and ebp are left as the paths set them, across attempts) */
+    uint32_t r_esi = 0;
     for (;;) {
         uint32_t s = rd32(c, sp0 + 0x14);
+        c->esi = s;
+        r_esi = s;
+        c->eax = ch;
+        c->edx = word;
         uint8_t last = (uint8_t)call4(c, sp0, f_10138080, 0x10137657u, eng, s, ch, word);
         wr8(c, sp0 + 0x13, last);
         if (!last || (call1(c, sp0, f_10142350, 0x1013766cu, eng) & 0xff)) {
@@ -304,8 +374,13 @@ static uint32_t read_value(cpu *c, uint32_t sp, uint32_t eng, uint32_t ch, uint3
         switch (t) {
         case T_SYM8: {
             uint8_t i = 0;
+            c->ebp = (s & 0xff) * 19;
+            c->edi = fd;
             if ((int16_t)rd16(c, fd + FD_NSYMS) > 0) {
-                while (!streq(c, word, rd32(c, rd32(c, fd + FD_NAMES) + 4u * i))) {
+                for (;;) {
+                    uint32_t name = rd32(c, rd32(c, fd + FD_NAMES) + 4u * i);
+                    r_esi = strcmp_end(c, word, name);
+                    if (streq(c, word, name)) break;
                     i++;
                     if (!((int16_t)i < (int16_t)rd16(c, fd + FD_NSYMS))) break;
                 }
@@ -321,8 +396,13 @@ static uint32_t read_value(cpu *c, uint32_t sp, uint32_t eng, uint32_t ch, uint3
         case T_SYM16: {
             int32_t i = 0;
             wr32(c, sp0 + 0x20, 0);
+            c->ebp = (s & 0xff) * 19;
+            c->edi = fd;
             if (0 < (int16_t)rd16(c, fd + FD_NSYMS)) {
-                while (!streq(c, word, rd32(c, rd32(c, fd + FD_NAMES) + 4u * (uint32_t)i))) {
+                for (;;) {
+                    uint32_t name = rd32(c, rd32(c, fd + FD_NAMES) + 4u * (uint32_t)i);
+                    r_esi = strcmp_end(c, word, name);
+                    if (streq(c, word, name)) break;
                     wr32(c, sp0 + 0x20, (uint32_t)++i);
                     if (!(i < (int16_t)rd16(c, fd + FD_NSYMS))) break;
                 }
@@ -337,7 +417,11 @@ static uint32_t read_value(cpu *c, uint32_t sp, uint32_t eng, uint32_t ch, uint3
         case T_INT:
             wr32(c, vptr, sp0 + 0x28);
             if (!int_word(c, sp0, word, 0x10137857u, 0x10137896u)) bad = 1;
-            else wr32(c, sp0 + 0x28, import_call(c, sp0, IAT_ATOL, 0x10137cafu, 1, &word));
+            else {
+                c->edi = rd32(c, IAT_ISCTYPE);      /* the scan's registers: edi the import, esi the end */
+                r_esi = word + guest_strlen(c, word);
+                wr32(c, sp0 + 0x28, import_call(c, sp0, IAT_ATOL, 0x10137cafu, 1, &word));
+            }
             if (bad) {
                 if (number_error(c, sp0, eng, ch, sp0 + 0xa8, RET_INT)) return 1;
                 continue;
@@ -346,7 +430,11 @@ static uint32_t read_value(cpu *c, uint32_t sp, uint32_t eng, uint32_t ch, uint3
         case T_SHORT:
             wr32(c, vptr, sp0 + 0x24);
             if (!int_word(c, sp0, word, 0x101379d8u, 0x10137a17u)) bad = 1;
-            else wr32(c, sp0 + 0x24, import_call(c, sp0, IAT_ATOI, 0x10137cc3u, 1, &word));
+            else {
+                c->edi = rd32(c, IAT_ISCTYPE);
+                r_esi = word + guest_strlen(c, word);
+                wr32(c, sp0 + 0x24, import_call(c, sp0, IAT_ATOI, 0x10137cc3u, 1, &word));
+            }
             if (bad) {
                 if (number_error(c, sp0, eng, ch, sp0 + 0xf4, RET_SHORT)) return 1;
                 continue;
@@ -358,6 +446,8 @@ static uint32_t read_value(cpu *c, uint32_t sp, uint32_t eng, uint32_t ch, uint3
                 if (word_error(c, sp0, eng, ch, sp0 + 0x18c, RET_DOUBLE)) return 1;
                 continue;
             }
+            c->edi = rd32(c, IAT_ISCTYPE);
+            r_esi = word + guest_strlen(c, word);
             import_call(c, sp0, IAT_ATOF, 0x10137cdau, 1, &word);
             wr64(c, sp0 + 0x54, fx_to_f64(ST(0), FENV(c)));
             fpop(c);
@@ -365,12 +455,29 @@ static uint32_t read_value(cpu *c, uint32_t sp, uint32_t eng, uint32_t ch, uint3
         default:
             break;
         }
+        c->esi = r_esi;
+        c->eax = rd32(c, ref);
+        c->ecx = rd32(c, sp0 + 0x14);
+        c->edx = ref;
         call4(c, sp0, f_101364c0, 0x10137c62u, eng, rd32(c, sp0 + 0x14), rd32(c, ref), rd32(c, vptr));
+        c->esi = ch;
         if (rd8(c, sp0 + 0x13) != '\n'
             && call2(c, sp0, f_10141e00, 0x10137c7bu, eng, ch) != '\n')
             call2(c, sp0, f_10141e80, 0x10137c8au, eng, ch);
         return 0;
     }
+}
+
+/* FUN_10137620 with the caller's ebx and esi restored (the body sets them as the original has them) */
+static uint32_t read_value(cpu *c, uint32_t sp, uint32_t eng, uint32_t ch, uint32_t ref)
+{
+    uint32_t ebx = c->ebx, esi = c->esi, edi = c->edi, ebp = c->ebp;
+    uint32_t r = read_value_body(c, sp, eng, ch, ref);
+    c->ebx = ebx;
+    c->esi = esi;
+    c->edi = edi;
+    c->ebp = ebp;
+    return r;
 }
 
 /* ------------------------------------------------------------------------------ splitting a token */
@@ -453,9 +560,11 @@ static uint32_t machine_init(cpu *c, uint32_t sp, uint32_t eng)
     wr32(c, WS(eng) + WS_SZ_LABEL, 6);
     wr32(c, WS(eng) + WS_SZ_CUTPT, 6);
     wr32(c, WS(eng) + WS_SZ_MARK, 2);
+    uint32_t esi = c->esi;                  /* the original keeps eng in esi */
+    c->esi = eng;
     uint32_t r = call2(c, at, f_10139f90, 0x10138490u, eng, 0xfa00);
-    if (!(r & 0xff)) return r;
-    r = call2(c, at, f_10139b20, 0x101384a4u, eng, 0x1000);
+    if (r & 0xff) r = call2(c, at, f_10139b20, 0x101384a4u, eng, 0x1000);
+    c->esi = esi;
     if (!(r & 0xff)) return r;
     wr32(c, RS(eng) + 0xfd2, rd32(c, WS(eng) + WS_TOP));
     wr32(c, WS(eng) + 0x8f, 0);
@@ -465,7 +574,9 @@ static uint32_t machine_init(cpu *c, uint32_t sp, uint32_t eng)
     uint32_t ws = WS(eng);
     if (!rd32(c, ws + WS_EVAL)) return 0;
     wr8(c, ws + WS_EVAL_TOP, 0xff);
-    /* FUN_10128fe4 */
+    /* FUN_10128fe4 (called: its return address, and the 8 its push / pop leaves below it) */
+    wr32(c, sp - 8, 0x1013850au);
+    wr32(c, sp - 0xc, 8);
     wr32(c, stream_desc(1) + SD_SYMBOL_SIZE, 3);
     wr32(c, stream_desc(1) + SD_SYMBOL_COPY, 3);
     wr32(c, stream_desc(2) + SD_SYMBOL_SIZE, 8);

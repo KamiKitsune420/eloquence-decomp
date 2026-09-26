@@ -89,7 +89,12 @@ static void snapshots_free(cpu *c, uint32_t eng)
 /* FUN_10139b20: the pool with one chunk of `size`. al 1, or 0 if out of memory. */
 uint32_t pool_init(cpu *c, uint32_t sp, uint32_t eng, uint32_t size)
 {
+    uint32_t esi = c->esi, edi = c->edi;    /* the original: esi eng, edi size */
+    c->esi = eng;
+    c->edi = size;
     uint32_t ch = chunk_new_at(c, sp - 8, eng, size, 0x10139b31u);
+    c->esi = esi;
+    c->edi = edi;
     wr32(c, WS(eng) + WS_POOL_FIRST, ch);
     uint32_t ws = WS(eng);
     wr32(c, ws + WS_POOL_CUR, rd32(c, ws + WS_POOL_FIRST));
@@ -310,7 +315,12 @@ uint32_t pool_index(cpu *c, uint32_t eng, uint32_t e, uint32_t size)
  * pushed and made the cut point. al 1, or 0 if out of memory. */
 uint32_t cstack_init(cpu *c, uint32_t sp, uint32_t eng, uint32_t size)
 {
+    uint32_t esi = c->esi, edi = c->edi;    /* the original: esi eng, edi size */
+    c->esi = eng;
+    c->edi = size;
     uint32_t ch = chunk_new_at(c, sp - 0xc, eng, size, 0x10139fa2u);
+    c->esi = esi;
+    c->edi = edi;
     wr32(c, WS(eng) + WS_CHUNK, ch);
     uint32_t ws = WS(eng);
     ch = rd32(c, ws + WS_CHUNK);
@@ -397,7 +407,17 @@ static int link_ends(cpu *c, uint32_t sp, uint32_t eng, uint32_t defaults, uint3
             a = start + 4 * s + 0xc;
             wr32(c, a, (rd32(c, a) & 3) | end);
             if (defaults) {
+                /* the original's registers: esi eng, ebp defaults, edi the counter slot, ebx the end mark */
+                uint32_t ebx = c->ebx, esi = c->esi, edi = c->edi, ebp = c->ebp;
+                c->esi = eng;
+                c->ebp = defaults;
+                c->edi = rd32(c, sp + 4);
+                c->ebx = rd32(c, WS(eng) + WS_END);
                 uint32_t r = call2(c, csp, f_10135c70, ret_reset, eng, rd32(c, sp + 4));
+                c->ebx = ebx;
+                c->esi = esi;
+                c->edi = edi;
+                c->ebp = ebp;
                 if (checked && !(r & 0xff)) return 0;
             }
             wr8(c, sp + 4, (uint8_t)(rd8(c, sp + 4) + 1));
@@ -413,6 +433,11 @@ void delta_relink(cpu *c, uint32_t sp, uint32_t eng, uint32_t defaults)
     call_at(c, sp - 4, f_10135af0, 0x10138fc0u, 1, &m);
     m = rd32(c, WS(eng) + WS_START);
     call_at(c, sp - 8, f_10135af0, 0x10138fccu, 1, &m);
+    if (rd8(c, eng + ENG_NSTREAMS)) {       /* push ebx, ebp, edi for the loop */
+        wr32(c, sp - 8, c->ebx);
+        wr32(c, sp - 0xc, c->ebp);
+        wr32(c, sp - 0x10, c->edi);
+    }
     link_ends(c, sp, eng, defaults, sp - 0x10, 0x10139079u, 0);
     uint32_t ws = WS(eng);
     call3(c, sp - 4, f_10135ab0, 0x101390a7u, eng, rd32(c, ws + WS_END), rd32(c, ws + WS_START));

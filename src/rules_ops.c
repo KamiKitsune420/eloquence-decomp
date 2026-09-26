@@ -878,19 +878,35 @@ void rl_insert_text(cpu *c, uint32_t sp, uint32_t eng, uint32_t s, uint32_t n, u
  * then FUN_1013a250(eng, &A, &B, s, n). 1 if either fails. */
 uint32_t rl_edit_count(cpu *c, uint32_t sp, uint32_t eng, uint32_t s, uint32_t val, uint32_t k)
 {
-    if (call5(c, sp - 0x20, f_1013ab30, 0x101334a3u, eng, SV_A(eng), SV_B(eng), s, k)) {
-        val_release(c, val);
-        return 1;
+    /* the original's registers: esi eng, ebx A's address, edi B's, then ebp val */
+    uint32_t ebx = c->ebx, esi = c->esi, edi = c->edi, ebp = c->ebp, r = 1;
+    c->esi = eng;
+    c->ebx = SV_A(eng);
+    c->edi = SV_B(eng);
+    c->eax = k;
+    c->ecx = s;
+    if (!call5(c, sp - 0x20, f_1013ab30, 0x101334a3u, eng, SV_A(eng), SV_B(eng), s, k)) {
+        uint32_t vref = sp - 8, nref = sp - 0x10;
+        wr16(c, nref + 4, (uint16_t)T_INT);
+        wr32(c, nref, sp + 4);
+        wr8(c, nref + 6, 0);
+        c->ebp = val;
+        c->eax = vref;
+        c->edx = sp + 4;
+        call3(c, sp - 0x20, f_10131520, 0x101334ebu, eng, vref, val);
+        c->ecx = vref;
+        c->edx = nref;
+        call3(c, sp - 0x2c, f_10138730, 0x101334fbu, eng, nref, vref);
+        c->eax = rd32(c, sp + 4);
+        c->ecx = s;
+        r = call5(c, sp - 0x38, f_1013a250, 0x1013350du, eng, SV_A(eng), SV_B(eng), s, rd32(c, sp + 4)) ? 1 : 0;
     }
-    uint32_t vref = sp - 8, nref = sp - 0x10;
-    wr16(c, nref + 4, (uint16_t)T_INT);
-    wr32(c, nref, sp + 4);
-    wr8(c, nref + 6, 0);
-    rl_ref_at(c, AT(sp - 0x20, 3), eng, vref, val);
-    rl_assign(c, eng, nref, vref);
-    uint32_t r = call5(c, sp - 0x38, f_1013a250, 0x1013350du, eng, SV_A(eng), SV_B(eng), s, rd32(c, sp + 4));
+    c->ebx = ebx;
+    c->esi = esi;
+    c->edi = edi;
+    c->ebp = ebp;
     val_release(c, val);
-    return r ? 1 : 0;
+    return r;
 }
 
 /* FUN_10135660: var := FUN_1013a570(eng, &A, &B, s) (0 for "undefined"), both sync variables resolved by
@@ -999,8 +1015,17 @@ void rl_lookup(cpu *c, uint32_t sp, uint32_t eng, uint32_t a, uint32_t flag, uin
 uint32_t rl_val_call(cpu *c, uint32_t sp, uint32_t eng, uint32_t a, uint32_t val)
 {
     uint32_t ref = sp - 8;
-    rl_ref_at(c, AT(sp - 0x10, 3), eng, ref, val);
+    /* through the machine as the original: esi val, edi eng */
+    uint32_t esi = c->esi, edi = c->edi;
+    c->esi = val;
+    c->edi = eng;
+    c->eax = ref;
+    call3(c, sp - 0x10, f_10131520, 0x101330c9u, eng, ref, val);
+    c->ecx = ref;
+    c->edx = a;
     uint32_t r = call3(c, sp - 0x1c, f_10137620, 0x101330d9u, eng, a, ref);
+    c->esi = esi;
+    c->edi = edi;
     val_release(c, val);
     return r ? 1 : 0;
 }
@@ -1088,31 +1113,50 @@ uint32_t rl_reach(cpu *c, uint32_t sp, uint32_t eng, uint32_t v)
 void rl_reset_streams(cpu *c, uint32_t sp, uint32_t eng, uint32_t n, uint32_t list)
 {
     uint8_t cnt = (uint8_t)n;
+    /* through the machine as the original: esi eng; the stream counter in bl (all streams), or edi the list
+     * and ebx the count left (pushed edi) */
+    uint32_t ebx = c->ebx, esi = c->esi, edi = c->edi;
+    uint32_t a1[1] = { eng };
+    c->esi = eng;
     if (cnt == 0) {
         wr8(c, sp + 8, 0);
         uint8_t k = 0;
         if (rd8(c, eng + ENG_NSTREAMS)) {
             do {
+                c->ebx = (ebx & 0xffffff00u) | k;
+                c->eax = rd32(c, sp + 8);
                 if (!(call2(c, sp - 8, f_10135c70, 0x10134f2du, eng, rd32(c, sp + 8)) & 0xff))
-                    rl_throw_at(c, AT(sp - 8, 1), eng);
+                    call_at(c, sp - 8, f_10130e80, 0x10134f3au, 1, a1);      /* longjmps */
                 k++;
                 wr8(c, sp + 8, k);
             } while (k < rd8(c, eng + ENG_NSTREAMS));
+            call_at(c, sp - 8, f_101390c0, 0x10134f53u, 1, a1);
+        } else {
+            call_at(c, sp - 8, f_101390c0, 0x10134fbfu, 1, a1);    /* the shared tail */
         }
-        call_at(c, sp - 8, f_101390c0, 0x10134f53u, 1, &eng);
-        return;
-    }
-    if (cnt == rd8(c, eng + ENG_NSTREAMS)) {
+    } else if (cnt == rd8(c, eng + ENG_NSTREAMS)) {
+        c->eax = rd32(c, WS(eng) + WS_START);
         call3(c, sp - 8, f_10139d80, 0x10134faeu, eng, rd32(c, WS(eng) + WS_START), 0);
         call2(c, sp - 0x14, f_10138fb0, 0x10134fb6u, eng, 1);
-        call_at(c, sp - 8, f_101390c0, 0x10134fbfu, 1, &eng);
-        return;
+        call_at(c, sp - 8, f_101390c0, 0x10134fbfu, 1, a1);
+    } else {
+        wr32(c, sp - 0xc, edi);
+        uint32_t left = cnt;
+        for (uint32_t i = 0; i < cnt; i++) {
+            c->edi = list + i;
+            c->ebx = left;
+            c->ecx = rd8(c, list + i);
+            if (!(call2(c, sp - 0xc, f_10135c70, 0x10134f7eu, eng, rd8(c, list + i)) & 0xff))
+                call_at(c, sp - 0xc, f_10130e80, 0x10134f8bu, 1, a1);        /* longjmps */
+            left--;
+        }
+        c->edi = edi;
+        c->ebx = left;
+        call_at(c, sp - 8, f_101390c0, 0x10134f99u, 1, a1);
     }
-    for (uint32_t i = 0; i < cnt; i++) {
-        if (!(call2(c, sp - 0xc, f_10135c70, 0x10134f7eu, eng, rd8(c, list + i)) & 0xff))
-            rl_throw_at(c, AT(sp - 0xc, 1), eng);
-    }
-    call_at(c, sp - 8, f_101390c0, 0x10134f99u, 1, &eng);
+    c->ebx = ebx;
+    c->esi = esi;
+    c->edi = edi;
 }
 
 /* FUN_10135730: match A..B against the pattern table entry n (eng[0x2c] + 34 n) with FUN_101435d0; 1 if

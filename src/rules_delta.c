@@ -442,15 +442,23 @@ void rl_new(cpu *c, uint32_t sp, uint32_t eng)
 {
     if (!eng) return;
     uint32_t a = eng;
+    uint32_t esi = c->esi, edi = c->edi;
+    wr32(c, sp - 8, edi);                   /* push edi (not on the null path) */
+    c->esi = eng;                           /* the original keeps eng in esi */
     call_at(c, sp - 8, f_10140f40, 0x10131c20u, 1, &a);
     uint32_t rs = guest_malloc(c, sp - 0xc, 0x11b2, 0x10131c2bu);
     wr32(c, eng + ENG_RS, rs);
     zero(c, rs, 0x11b2);
-    wr8(c, RS(eng) + RS_STATUS, 0xff);                             /* FUN_101355d0 */
-    rl_ws_new(c, AT(sp - 0x14, 1), eng);
+    c->edi = rs + 0x11b2;                   /* where rep stos left it */
+    c->eax = 0;
+    c->ecx = 0;
+    call_at(c, sp - 0x10, f_101355d0, 0x10131c41u, 1, &a);
+    call_at(c, sp - 0x14, f_10135900, 0x10131c47u, 1, &a);
     call_at(c, sp - 0x18, f_1012f0b0, 0x10131c4du, 1, &a);
     call_at(c, sp - 0x1c, f_10141350, 0x10131c53u, 1, &a);
     call_at(c, sp - 0x20, f_1012aed0, 0x10131c59u, 1, &a);
+    c->esi = esi;
+    c->edi = edi;
 }
 
 /* FUN_10131c60: free them */
@@ -495,10 +503,18 @@ static void reset_token_globals(cpu *c, uint32_t eng)
 }
 
 /* FUN_10131b40: reset all global variables */
-void rl_reset_globals(cpu *c, uint32_t eng)
+void rl_reset_globals(cpu *c, uint32_t sp, uint32_t eng)
 {
     for (int32_t k = 0; k < (int32_t)rd32(c, eng + GV_NSYNC); k++)
         wr32(c, rd32(c, rd32(c, eng + GV_SYNC) + 4u * (uint32_t)k), 0);
+    if (sp) {                               /* its saves, after the first loop (push ebp, edi only with tokens) */
+        wr32(c, sp - 4, c->ebx);
+        wr32(c, sp - 8, c->esi);
+        if ((int32_t)rd32(c, eng + GV_NTOKENS) > 0) {
+            wr32(c, sp - 0xc, c->ebp);
+            wr32(c, sp - 0x10, c->edi);
+        }
+    }
     reset_token_globals(c, eng);
     for (int32_t k = 0; k < (int32_t)rd32(c, eng + GV_NINTS); k++)
         wr32(c, rd32(c, rd32(c, eng + GV_INTS) + 4u * (uint32_t)k), 0);
@@ -534,13 +550,22 @@ uint32_t rl_utterance_reset(cpu *c, uint32_t sp, uint32_t eng)
     wr32(c, RS(eng) + RS_11AC, 0);
     uint8_t st = rd8(c, RS(eng) + RS_STATUS);
     if (st == 0xf9 || st == 0xff) {
+        uint32_t ebx = c->ebx, esi = c->esi;    /* the original: esi eng, ebx 0 */
+        c->esi = eng;
+        c->ebx = 0;
         uint32_t r = call2(c, sp - 8, f_10138d70, 0x10131474u, eng, 1);
+        c->ebx = ebx;
+        c->esi = esi;
         if (!(r & 0xff)) return r;
         wr32(c, rd32(c, eng + 0x34) + 2, rd32(c, WS(eng) + WS_END));
         wr32(c, rd32(c, eng + 0x38) + 2, rd32(c, WS(eng) + WS_START));
     }
     wr32(c, rd32(c, eng + ENG_OUT) + 0x1b5, 0);
     int32_t ntok = (int32_t)rd32(c, eng + GV_NTOKENS);
+    if (ntok > 0) {                         /* push ebp, push edi for the token loop */
+        wr32(c, sp - 0xc, c->ebp);
+        wr32(c, sp - 0x10, c->edi);
+    }
     reset_token_globals(c, eng);
     return ((ntok <= 0 ? (uint32_t)ntok : 0u) & 0xffffff00u) | 1;    /* eax as the original leaves it */
 }
@@ -554,8 +579,16 @@ uint32_t rl_start(cpu *c, uint32_t sp, uint32_t eng, int32_t n, uint32_t p)
     else wr32(c, rd32(c, eng + ENG_OUT) + 0x1d5, 0);
     wr32(c, RS(eng) + 0x10fe, 0);
     uint32_t out = rd32(c, eng + ENG_OUT);
-    if (!(call3(c, sp - 4, f_10141040, 0x10135634u, eng, rd32(c, out + 0x1d1), rd32(c, out + 0x1d5)) & 0xff))
-        return 0;
-    if (!(rl_utterance_reset(c, AT(sp - 4, 1), eng) & 0xff)) return 0;
-    return 1;
+    /* through the machine as the original: esi eng */
+    uint32_t esi = c->esi, r = 0;
+    c->esi = eng;
+    c->eax = out;
+    c->ecx = rd32(c, out + 0x1d5);
+    c->edx = rd32(c, out + 0x1d1);
+    uint32_t a1[1] = { eng };
+    if ((call3(c, sp - 4, f_10141040, 0x10135634u, eng, rd32(c, out + 0x1d1), rd32(c, out + 0x1d5)) & 0xff)
+        && (call_at(c, sp - 4, f_101313d0, 0x10135641u, 1, a1) & 0xff))
+        r = 1;
+    c->esi = esi;
+    return r;
 }

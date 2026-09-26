@@ -45,6 +45,9 @@ void f_10135f70(cpu *c);    /* rl_skip_marks */
 void f_10136570(cpu *c);    /* rl_insert_token */
 void f_101385f0(cpu *c);    /* rl_add */
 void f_101386e0(cpu *c);    /* rl_is_negative */
+void f_101313d0(cpu *c);    /* rl_utterance_reset */
+void f_101355d0(cpu *c);    /* the rule state's status */
+void f_10135900(cpu *c);    /* rl_ws_new */
 void f_101364c0(cpu *c);    /* rl_token_init */
 void f_10138d40(cpu *c);    /* pool_alloc for a stream's token */
 void f_101360a0(cpu *c);    /* rl_next_token */

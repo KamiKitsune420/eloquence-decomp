@@ -383,7 +383,7 @@ void     rl_ws_new(cpu *c, uint32_t sp, uint32_t eng);
 void     rl_ws_free(cpu *c, uint32_t sp, uint32_t eng);
 void     rl_new(cpu *c, uint32_t sp, uint32_t eng);
 void     rl_free(cpu *c, uint32_t sp, uint32_t eng);
-void     rl_reset_globals(cpu *c, uint32_t eng);
+void     rl_reset_globals(cpu *c, uint32_t sp, uint32_t eng);
 uint32_t rl_utterance_reset(cpu *c, uint32_t sp, uint32_t eng);
 uint32_t rl_start(cpu *c, uint32_t sp, uint32_t eng, int32_t n, uint32_t p);
 uint32_t rl_reach(cpu *c, uint32_t sp, uint32_t eng, uint32_t v);
@@ -403,7 +403,14 @@ PORT_FN(10135bb0) { RET(rl_ring_insert_after(c, ARG(0), ARG(1), ARG(2))); }
 PORT_FN(10135c20) { RET(rl_ring_remove(c, ARG(0), ARG(1))); }
 PORT_FN(101359f0) { RET(rl_next_mark(c, ARG(0), (int8_t)ARG(1))); }
 PORT_FN(10135a10) { RET(rl_prev_mark(c, ARG(0), ARG(1), (int8_t)ARG(2))); }
-PORT_FN(10135b20) { RET(rl_stream_type(c, ARG(0))); }
+/* it leaves ecx 9 s and edx the field descriptor, which callers push later without reloading them */
+PORT_FN(10135b20)
+{
+    int32_t s = (int8_t)ARG(0);
+    c->ecx = (uint32_t)(s * 9);
+    c->edx = rd32(c, stream_desc((uint32_t)s) + SD_FIELDS);
+    RET(rl_stream_type(c, ARG(0)));
+}
 PORT_FN(101359c0) { RET(rl_mark_number(c, SP, ARG(0), ARG(1))); }
 PORT_FN(10136200) { RET(rl_last_mark_fwd(c, ARG(0), ARG(1))); }
 PORT_FN(10136240) { RET(rl_last_mark_back(c, ARG(0), ARG(1), ARG(2))); }
@@ -420,7 +427,7 @@ PORT_FN(10135900) { rl_ws_new(c, SP, ARG(0)); RET(c->eax); }
 PORT_FN(10135970) { rl_ws_free(c, SP, ARG(0)); RET(c->eax); }
 PORT_FN(10131c10) { rl_new(c, SP, ARG(0)); RET(c->eax); }
 PORT_FN(10131c60) { rl_free(c, SP, ARG(0)); RET(c->eax); }
-PORT_FN(10131b40) { rl_reset_globals(c, ARG(0)); RET(c->eax); }
+PORT_FN(10131b40) { rl_reset_globals(c, c->esp, ARG(0)); RET(c->eax); }
 PORT_FN(101313d0) { RET(rl_utterance_reset(c, SP, ARG(0))); }
 PORT_FN(101355e0) { RET(rl_start(c, SP, ARG(0), (int32_t)ARG(1), ARG(2))); }
 PORT_FN(10134cc0) { RET(rl_reach(c, SP, ARG(0), ARG(1))); }
