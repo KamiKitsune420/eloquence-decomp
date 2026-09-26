@@ -24,6 +24,8 @@ MP = os.environ.get("ELOQ_MP", "4")      # parallel compiler processes (the gene
 
 # the hand ports and their adapters (the functions they replace are listed in src/ported.h)
 PORTS = "klatt.c klatt_guest.c framer.c framer_guest.c rules.c rules_ops.c rules_delta.c rules_pool.c rules_edit.c rules_guest.c rules_io.c tracks.c gen\prologues.c"
+# the rules written by hand (src/rules/hand.h lists them; tools/delta_lift.py leaves their lifted bodies out)
+PORTS += "".join(" rules\\" + os.path.basename(p) for p in sorted(glob.glob(os.path.join(ROOT, "src", "rules", "*.c"))))
 
 
 def main():

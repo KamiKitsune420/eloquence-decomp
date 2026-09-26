@@ -98,6 +98,7 @@ def run(arch, tmp, case, only):
                         text=True, env=e)
     fns = {}
     total = None
+    uninit = [0, 0]
     for l in r.stderr.splitlines():
         m = re.match(r"DIFFTEST ([0-9a-f]{8}) calls (\d+) checked (\d+) bad (\d+)(?: first: (.*))?$", l)
         if m:
@@ -105,8 +106,12 @@ def run(arch, tmp, case, only):
         m = re.match(r"DIFFTEST_RESULT calls (\d+) checked (\d+) bad (\d+)", l)
         if m:
             total = tuple(map(int, m.groups()))
+        m = re.match(r"DIFFTEST_UNINIT masked (\d+) bytes, (\d+) calls not compared", l)
+        if m:
+            uninit[0] += int(m.group(1))
+            uninit[1] += int(m.group(2))
     ha, hb = wav_hash(wa), wav_hash(wb)
-    return name, r.returncode, fns, total, ha == hb and ha is not None
+    return name, r.returncode, fns, total, ha == hb and ha is not None, uninit
 
 
 def main():
@@ -121,8 +126,11 @@ def main():
     agg = {}
     problems = []
     tot = [0, 0, 0]
+    unin = [0, 0]
     with cf.ThreadPoolExecutor(a.j) as ex:
-        for name, rc, fns, total, same in ex.map(lambda c: run(a.arch, tmp, c, a.only), cs):
+        for name, rc, fns, total, same, uninit in ex.map(lambda c: run(a.arch, tmp, c, a.only), cs):
+            unin[0] += uninit[0]
+            unin[1] += uninit[1]
             if total is None or rc != 0:
                 problems.append("%s: no result (exit %d)" % (name, rc))
                 continue
@@ -141,6 +149,8 @@ def main():
         calls, checked, bad, first = agg[f]
         print("%s calls %10d checked %10d bad %6d%s" % (f, calls, checked, bad, "  first: " + first if first else ""))
     print("%d cases: calls %d, checked %d, mismatches %d" % (len(cs), tot[0], tot[1], tot[2]))
+    if os.environ.get("DIFFTEST_UNINIT"):
+        print("uninitialized-dependent: %d bytes not compared, %d calls not compared" % tuple(unin))
     for p in problems[:40]:
         print(p)
     print("%d problem cases" % len(problems))

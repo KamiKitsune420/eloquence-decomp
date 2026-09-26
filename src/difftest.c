@@ -5,6 +5,11 @@
  *   DIFFTEST=all | none | 101311a0,10131790 ...        which ported functions to check (default all)
  *   DIFFTEST_VERBOSE=n                                 print the first n mismatches in full (default 3)
  *   DIFFTEST_SHOW=n                                    list n differing bytes per mismatch (default 6)
+ *   DIFFTEST_UNINIT=1                                  run the original twice, the second time with the stack
+ *                                                      below its entry filled with a pattern, and leave out
+ *                                                      of the comparison whatever comes out differently (it
+ *                                                      depends on uninitialized bytes: the contract for code
+ *                                                      in clean C, which does not reproduce them)
  *
  * The functions checked are those of src/ported.h and, in builds with ELOQ_LIFTED, the lifted rules of
  * src/gen/lifted.h (tools/delta_lift.py).
@@ -59,15 +64,16 @@ typedef struct {
     int enabled;
     int lifted;                     /* from gen/lifted.h */
     long calls, checked, bad;
+    long flowdep;                   /* DIFFTEST_UNINIT: calls not compared (the path depends on garbage) */
     char first[8192];
 } dt_fn;
 
 static dt_fn g_fns[] = {
-#define PORTED(a, fl) { 0x##a##u, fl, 1, 0, 0, 0, 0, "" },
+#define PORTED(a, fl) { 0x##a##u, fl, 1, 0, 0, 0, 0, 0, "" },
 #include "ported.h"
 #undef PORTED
 #ifdef ELOQ_LIFTED
-#define PORTED(a, fl) { 0x##a##u, fl, 1, 1, 0, 0, 0, "" },
+#define PORTED(a, fl) { 0x##a##u, fl, 1, 1, 0, 0, 0, 0, "" },
 #include "gen/lifted.h"           /* the lifted rules (tools/delta_lift.py) */
 #endif
 #undef PORTED
@@ -113,6 +119,9 @@ static int g_recomp;                /* inside a recompiled reference run */
 static int g_scratch;               /* DIFFTEST_SCRATCH: compare the scratch below the entry esp too */
 static unsigned g_show = 6;         /* DIFFTEST_SHOW: how many differing bytes a report lists */
 static int g_rtrecomp;              /* DIFFTEST_RTRECOMP: the hand ports (not the lifted rules) run recompiled */
+static int g_uninit;                /* DIFFTEST_UNINIT: leave out what depends on uninitialized stack bytes */
+static long g_masked, g_flowdep;    /* bytes left out; calls whose control flow depends on them */
+#define UNINIT_SPAN 0x10000u         /* the stack filled below the entry esp for the second original run */
 
 static void blk_read(cpu *c, uint32_t blk, uint8_t *out)
 {
@@ -352,6 +361,44 @@ static void dt_call(cpu *c, dt_fn *e, guest_fn port, guest_fn recomp)
     }
     host_restore(&hpre);
 
+    /* DIFFTEST_UNINIT: the original once more, with the stack below its entry filled with a pattern. What
+     * it leaves differently then depends on uninitialized bytes (the original reads them; a hand port with
+     * clean C need not reproduce them): those bytes and registers are not compared. */
+    uint8_t *a2data = NULL;
+    size_t na2 = na;
+    cpu A2 = A;
+    int flowdep = 0;
+    if (g_uninit) {
+        static uint8_t save[MAXDEPTH][UNINIT_SPAN + BLK];
+        uint8_t *sv = save[g_depth - 1];
+        const uint32_t lo = (entry - UNINIT_SPAN) & ~(BLK - 1);
+        for (uint32_t a = lo; a < entry; a += BLK) blk_read(c, a >> WT_BITS, sv + (a - lo));
+        for (uint32_t a = lo; a < entry; a += BLK) {
+            uint8_t fill[BLK];
+            memcpy(fill, sv + (a - lo), BLK);
+            for (uint32_t k = 0; k < BLK && a + k < entry; k++) fill[k] = (uint8_t)(0xa5u ^ ((a + k) >> 2));
+            blk_write(c, a >> WT_BITS, fill);
+        }
+        volatile int a2_lj = 0;
+        fr.lj_buf = 0;
+        g_recomp = 1;
+        if (!setjmp(fr.jb)) recomp(c);
+        else a2_lj = 1;
+        g_recomp = 0;
+        L = &g_lv[g_depth - 1];
+        A2 = *c;
+        flowdep = a2_lj != a_lj || (a_lj && fr.lj_buf != a_buf);
+        na2 = L->n;
+        a2data = (uint8_t *)malloc(na2 * BLK + 1);
+        for (size_t i = 0; i < na2; i++) blk_read(c, L->log[i].blk, a2data + i * BLK);
+        for (size_t i = na2; i-- > 0;) blk_write(c, L->log[i].blk, L->log[i].pre);
+        for (uint32_t a = lo; a < entry; a += BLK) blk_write(c, a >> WT_BITS, sv + (a - lo));
+        cpu now = *c;
+        *c = pre;
+        keep_host_fields(c, &now);
+        host_restore(&hpre);
+    }
+
     /* the hand port */
     volatile int b_lj = 0;
     fr.lj_buf = 0;
@@ -364,15 +411,21 @@ static void dt_call(cpu *c, dt_fn *e, guest_fn port, guest_fn recomp)
     /* compare */
     char msg[16384];
     int len = 0, bad = 0;
+    if (flowdep) {                                /* nothing to compare: which path it takes depends on garbage */
+        g_flowdep++;
+        e->flowdep++;
+        goto done;
+    }
     if (a_lj != b_lj) REPORT("original %s, port %s; ", a_lj ? "longjmp" : "returned", b_lj ? "longjmp" : "returned");
     else if (a_lj && a_buf != b_buf) REPORT("longjmp to %08x vs %08x; ", a_buf, b_buf);
     uint32_t mask = (e->flags & DT_VOID) ? 0 : (e->flags & DT_AL) ? 0xffu : 0xffffffffu;
+    mask &= ~(A.eax ^ A2.eax);                    /* bits that depend on uninitialized bytes */
     if ((A.eax ^ c->eax) & mask) REPORT("eax %08x vs %08x; ", A.eax, c->eax);
-    if ((e->flags & DT_EDX) && A.edx != c->edx) REPORT("edx %08x vs %08x; ", A.edx, c->edx);
-    if (A.ebx != c->ebx) REPORT("ebx %08x vs %08x; ", A.ebx, c->ebx);
-    if (A.esi != c->esi) REPORT("esi %08x vs %08x; ", A.esi, c->esi);
-    if (A.edi != c->edi) REPORT("edi %08x vs %08x; ", A.edi, c->edi);
-    if (A.ebp != c->ebp) REPORT("ebp %08x vs %08x; ", A.ebp, c->ebp);
+    if ((e->flags & DT_EDX) && A.edx == A2.edx && A.edx != c->edx) REPORT("edx %08x vs %08x; ", A.edx, c->edx);
+    if (A.ebx == A2.ebx && A.ebx != c->ebx) REPORT("ebx %08x vs %08x; ", A.ebx, c->ebx);
+    if (A.esi == A2.esi && A.esi != c->esi) REPORT("esi %08x vs %08x; ", A.esi, c->esi);
+    if (A.edi == A2.edi && A.edi != c->edi) REPORT("edi %08x vs %08x; ", A.edi, c->edi);
+    if (A.ebp == A2.ebp && A.ebp != c->ebp) REPORT("ebp %08x vs %08x; ", A.ebp, c->ebp);
     if (A.esp != c->esp) REPORT("esp %08x vs %08x; ", A.esp, c->esp);
     if (A.fcw != c->fcw) REPORT("fcw %04x vs %04x; ", A.fcw, c->fcw);
     if (A.ftop != c->ftop) REPORT("x87 top %u vs %u; ", A.ftop, c->ftop);
@@ -394,6 +447,7 @@ static void dt_call(cpu *c, dt_fn *e, guest_fn port, guest_fn recomp)
     unsigned nd = 0;
     for (size_t i = 0; i < L->n; i++) {
         const uint8_t *ra = i < na ? adata + i * BLK : L->log[i].pre;
+        const uint8_t *r2 = !a2data ? ra : i < na2 ? a2data + i * BLK : L->log[i].pre;
         uint8_t rb[BLK];
         blk_read(c, L->log[i].blk, rb);
         if (!memcmp(ra, rb, BLK)) continue;
@@ -401,6 +455,10 @@ static void dt_call(cpu *c, dt_fn *e, guest_fn port, guest_fn recomp)
         for (unsigned k = 0; k < BLK; k++) {
             uint32_t at = base + k;
             if (ra[k] == rb[k]) continue;
+            if (ra[k] != r2[k]) {                 /* depends on uninitialized bytes */
+                g_masked++;
+                continue;
+            }
             if (at < entry && at >= entry - 0x01000000u) {
                 /* the scratch below the entry esp: compared only with DIFFTEST_SCRATCH=1 (debugging: the
                  * uninitialized bytes a later caller reads) */
@@ -421,7 +479,9 @@ static void dt_call(cpu *c, dt_fn *e, guest_fn port, guest_fn recomp)
             fprintf(stderr, "DIFFTEST MISMATCH %08x %s\n", e->addr, msg);
         }
     }
+done:
     free(adata);
+    free(a2data);
     free(apcm);
 
     level_pop(c);
@@ -449,6 +509,7 @@ static void dt_setup(void)
     }
     g_rtrecomp = getenv("DIFFTEST_RTRECOMP") != NULL;
     g_scratch = getenv("DIFFTEST_SCRATCH") != NULL;
+    g_uninit = getenv("DIFFTEST_UNINIT") != NULL;
     if (getenv("DIFFTEST_SHOW")) g_show = (unsigned)atol(getenv("DIFFTEST_SHOW"));
     const char *v = getenv("DIFFTEST_VERBOSE");
     if (v) g_verbose_left = atol(v);
@@ -460,9 +521,13 @@ static void dt_report(void)
     for (unsigned i = 0; i < NFNS; i++) {
         dt_fn *e = &g_fns[i];
         if (!e->calls) continue;
+        if (e->flowdep) fprintf(stderr, "DIFFTEST %08x uninit-dependent path in %ld calls (not compared)\n", e->addr,
+                                e->flowdep);
         fprintf(stderr, "DIFFTEST %08x calls %ld checked %ld bad %ld%s%s\n", e->addr, e->calls, e->checked, e->bad,
                 e->first[0] ? " first: " : "", e->first);
     }
+    if (g_uninit)
+        fprintf(stderr, "DIFFTEST_UNINIT masked %ld bytes, %ld calls not compared\n", g_masked, g_flowdep);
     fprintf(stderr, "DIFFTEST_RESULT calls %ld checked %ld bad %ld\n", g_total_calls, g_total_checked, g_total_bad);
 }
 

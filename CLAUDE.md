@@ -78,6 +78,10 @@ rules, all stack scratch (the lifter does not reproduce every dead stack byte; n
    memory identical except bytes the original leaves uninitialized (masked in the tester; any that reach the
    output are reproduced deliberately and documented). No return addresses / register echoes in new code;
    at the end the software x86 and all generated code are deleted.
+   Method: purely by hand (user's choice). Loop: `python tools/rule_view.py <addrs>` to read, write in
+   src/rules/*.c against src/rules/rule.h, list in src/rules/hand.h, `python tools/delta_lift.py`, build
+   difftest, `$env:DIFFTEST_UNINIT="1"; $env:DIFFTEST_RTRECOMP="1"; python tools/difftest.py --only <rules>`,
+   then regress. Status and open items: notes/port.md ("The whole engine hand-written").
 
 ## Environment gotchas
 

@@ -175,6 +175,8 @@ int      rl_enter(cpu *c, uint32_t eng, uint32_t frame, uint32_t slot, uint32_t 
                   uint32_t jmpbuf);                                          /* FUN_101315e0 */
 uint32_t rl_leave(cpu *c, uint32_t eng);                                     /* FUN_10131790 */
 void     rl_throw(cpu *c, uint32_t eng);                                     /* FUN_10130e80 */
+void     rl_set_scope(cpu *c, uint32_t eng, uint8_t n, uint32_t streams);    /* FUN_1004bdb2 */
+void     rl_drop_top(cpu *c, uint32_t eng);                                  /* FUN_1013a040 */
 int32_t  rl_backtrack(cpu *c, uint32_t eng, int32_t depth);                  /* FUN_101311a0 */
 void     rl_cut(cpu *c, uint32_t eng);                                       /* FUN_10131f90 */
 void     rl_push_retry(cpu *c, uint32_t eng, uint32_t label);                /* FUN_10131ff0 */

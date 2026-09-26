@@ -300,6 +300,26 @@ memory stays identical except bytes the original leaves uninitialized (the teste
 reach the output are reproduced deliberately and documented). New code carries no return addresses or
 register echoes. The end state deletes the software x86, x2c and the lifter from the build.
 
+Method (user's choice, 2026-09-25 night): **purely by hand** - each rule read (tools/rule_view.py: the lifted
+C with its data decoded) and written in C against src/rules/rule.h; no tool-made drafts. A rule is listed in
+src/rules/hand.h, delta_lift then leaves its lifted body out, and it is checked with
+`DIFFTEST_UNINIT=1 DIFFTEST_RTRECOMP=1 python tools/difftest.py --only <rules>`. Rules the test texts never
+run are marked "unverified" in their comment.
+
+What the difftest showed about the contract: calls to other rules and engine functions must be made at the
+original's esp (rule_sub(r, at, f)): the original leaves earlier calls' arguments on the stack, and a
+callee rule's frame addresses stay in the rule state (its registered variables) - one byte differed in
+the heap without it. Runtime calls need no such care. With DIFFTEST_UNINIT a deliberately wrong rule was
+caught (64 mismatches), so the masking does not hide real differences.
+
+Status (night 2026-09-25): 71 of 993 rules hand-written (src/rules/: calls.c = the whole first module
+10001000-10004100 except 1000274e; letters.c 100dbdd1; misc.c 10 small ones) plus rl_set_scope
+(FUN_1004bdb2) and rl_drop_top (FUN_1013a040) in the runtime. difftest UNINIT+RTRECOMP: 0 mismatches on
+all that run; regress identical x64 + x86. Open: 1000274e (my version differs in one heap byte in 192 of
+7074 calls; disabled with #if 0 in calls.c, the lifted rule runs). Not run by the test texts, so
+unverified: 10004483 10021189 10001d4e 10001dfb 10001ecf 10001fc1 10003451 10003513 100035d5 10003697
+10003759 10003cd1 10003d93 10003e55. Next: the rules from 10004100 on, in address order.
+
 ## Plan
 
 1. ~~Run the whole recompiled engine and compare with ecisay~~ done; more: long texts, several utterances

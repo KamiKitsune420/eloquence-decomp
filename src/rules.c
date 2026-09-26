@@ -256,6 +256,39 @@ void rl_push_mark(cpu *c, uint32_t eng, int type)
     wr8(c, top, (uint8_t)type);
 }
 
+/* FUN_1013a040: drop the control stack's top entry, whatever it is (an undo entry is not undone). For a
+ * type it does not know the original moves the top by its argument, the instance's address; kept. */
+void rl_drop_top(cpu *c, uint32_t eng)
+{
+    uint32_t ws = WS(eng), top = rd32(c, ws + WS_TOP), size;
+    switch (rd8(c, top)) {
+    case CS_RETRY: case CS_NEXT: size = rd32(c, ws + WS_SZ_LABEL); break;
+    case CS_POS:                 size = rd32(c, ws + WS_SZ_POS); break;
+    case CS_UNDO:                size = ((rd32(c, top + 7) - 1) | 1) + 1 + rd32(c, ws + WS_SZ_UNDO); break;
+    case CS_DOWN: case CS_UP:    size = rd32(c, ws + WS_SZ_MARK); break;
+    case CS_CUTPT:               size = rd32(c, ws + WS_SZ_CUTPT); break;
+    case CS_FRAME:               size = rd32(c, ws + WS_SZ_FRAME); break;
+    default:                     size = eng; break;
+    }
+    wr32(c, ws + WS_TOP, top + size);
+    wr32(c, ws + WS_TOP_OFF, rd32(c, ws + WS_TOP_OFF) + size);
+}
+
+/* FUN_1004bdb2: the streams the rule looks at: n stream numbers (bytes) at `streams` become ENG_SCOPE,
+ * and each one's slot in ENG_SEEN is its position there (the other streams' slots are ENG_NSTREAMS) */
+void rl_set_scope(cpu *c, uint32_t eng, uint8_t n, uint32_t streams)
+{
+    wr8(c, RS(eng) + RS_NSCOPE, n);
+    uint32_t slot = rd32(c, eng + ENG_SLOT);
+    uint8_t ns = rd8(c, eng + ENG_NSTREAMS);
+    for (uint32_t i = 0; i < ns; i++) wr8(c, slot + i, ns);
+    for (uint8_t i = 0; i < n; i++) {
+        uint8_t s = rd8(c, streams + i);
+        wr8(c, rd32(c, eng + ENG_SCOPE) + i, s);
+        wr8(c, rd32(c, eng + ENG_SLOT) + s, i);
+    }
+}
+
 /* FUN_10132ac0: the rule matched: go on at `label` after a cut, trailing variable writes from now on */
 void rl_succeed(cpu *c, uint32_t eng, uint32_t label)
 {
