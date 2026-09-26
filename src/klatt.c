@@ -451,7 +451,42 @@ typedef struct {
     float asp_amp;         /* aspiration noise gain */
     int first_block;       /* per-frame setup of the source not done yet */
     int remember_from;     /* first block whose frequency/bandwidth is remembered at the end */
+    klatt_trace *tr;       /* the original's stack frame, or NULL */
+    uint32_t ebp;          /* what the original's ebp holds after the glottal source and the branches */
 } synth;
+
+/* ------------------------------------------------------------------ the original's stack frame */
+
+/* Where the original keeps things in its frame (offsets from its esp after the prologue). Its locals are
+ * the synth fields above, a few loop variables and x87 scratch; only the values they end up with are
+ * recorded (with a trace, see klatt.h). */
+enum {
+    L_SCRATCH    = 0x10,    /* x87 scratch: n * 1000, the pitch period in samples, the period, ... */
+    L_SIGN       = 0x14,    /* the parallel gain's sign */
+    L_FILTERED   = 0x18,    /* samples through the tilt filter; also noise and a pointer scratch */
+    L_FIRST      = 0x1f,    /* b  first_block */
+    L_PAR_K      = 0x20,    /* the parallel formant loop's block number */
+    L_ASP_AMP    = 0x24,
+    L_REMEMBER   = 0x28,    /* remember_from */
+    L_NSAMP      = 0x2c,
+    L_LEFT       = 0x30,
+    L_BYPASS     = 0x34,
+    L_BW         = 0x38,    /* f[21] bw[] */
+    L_FREQ       = 0x8c,    /* f[21] freq[] */
+    L_PAR_DB     = 0xe0     /* i[8] par_db[] */
+};
+
+static void tr_bytes(synth *sy, int off, const void *v, size_t n)
+{
+    if (!sy->tr) return;
+    memcpy(sy->tr->frame + off, v, n);
+    memset(sy->tr->written + off, 1, n);
+}
+static void tr32(synth *sy, int off, uint32_t v) { tr_bytes(sy, off, &v, 4); }
+static void trf(synth *sy, int off, float v) { tr_bytes(sy, off, &v, 4); }
+static void tr8(synth *sy, int off, uint8_t v) { tr_bytes(sy, off, &v, 1); }
+/* a guest address in the original's frame */
+static uint32_t tr_addr(const synth *sy, int off) { return sy->tr ? sy->tr->stack + (uint32_t)off : 0; }
 
 /* Seg list: S_SEG[S_NSEG] is the stretch being counted. */
 static void seg_next(uint8_t *s, int32_t v)
@@ -489,6 +524,20 @@ static void read_frame(synth *sy)
         sy->bw[BLK_CASC + i] = fr[FORMANT_SLOT[i] + 1];
         sy->bw[BLK_PAR + i] = fr[44 + i];
         sy->par_db[i] = ftol(fr[35 + i]);
+    }
+    if (sy->tr) {                       /* the original's copies */
+        for (int k = BLK_ZERO1; k <= BLK_POLE2; k++) {
+            trf(sy, L_FREQ + 4 * k, sy->freq[k]);
+            trf(sy, L_BW + 4 * k, sy->bw[k]);
+        }
+        for (int i = 0; i < n; i++) {
+            trf(sy, L_FREQ + 4 * (BLK_CASC + i), sy->freq[BLK_CASC + i]);
+            trf(sy, L_FREQ + 4 * (BLK_PAR + i), sy->freq[BLK_PAR + i]);
+            trf(sy, L_BW + 4 * (BLK_CASC + i), sy->bw[BLK_CASC + i]);
+            trf(sy, L_BW + 4 * (BLK_PAR + i), sy->bw[BLK_PAR + i]);
+            tr32(sy, L_PAR_DB + 4 * i, (uint32_t)sy->par_db[i]);
+        }
+        tr32(sy, L_REMEMBER, (uint32_t)sy->remember_from);
     }
 }
 
@@ -587,6 +636,8 @@ static void parallel_coefficients(synth *sy)
         }
         sign = -sign;
     }
+    trf(sy, L_SIGN, sign);
+    tr32(sy, L_PAR_K, (uint32_t)(BLK_PAR + (sy->nres > 0 ? sy->nres : 0)));
 }
 
 /* The nasal zeros run as anti-resonators: invert their coefficients (and ramps). */
@@ -659,6 +710,7 @@ static void start_voicing(synth *sy)
     SETF(S_T0_MS, (float)t0);
     float t0_samples = (float)((double)F(S_SAMPLE_RATE) * t0 * K_PER_MS);
     SETF(S_T0_SAMPLES, t0_samples);
+    trf(sy, L_SCRATCH, t0_samples);
 
     /* pulse shape: the open phase lasts OQ * T0; b sets its length, a its amplitude */
     if ((double)F(S_OQ) > K_ZERO_D) {
@@ -711,6 +763,9 @@ static void start_voicing(synth *sy)
     sy->bw[BLK_TILT] = imgf(sy->ctx, IMG_TILT_FREQ + 4 * (uint32_t)tilt);
     sy->remember_from = BLK_TILT;
     sy->freq[BLK_TILT] = (float)((double)sy->bw[BLK_TILT] * K_TILT_FREQ);
+    tr32(sy, L_REMEMBER, BLK_TILT);
+    trf(sy, L_BW, sy->bw[BLK_TILT]);
+    trf(sy, L_FREQ, sy->freq[BLK_TILT]);
     int mode = I(S_RATE_MODE);
     if (mode == 1 || mode == 0) {       /* precomputed A, B, C for 11025 / 8000 Hz */
         uint32_t tab = (mode == 1 ? IMG_TILT_11K : IMG_TILT_8K) + 12 * (uint32_t)tilt;
@@ -724,6 +779,7 @@ static void start_voicing(synth *sy)
     if (F(S_VOICE_HOLD) != K_ZERO) {
         seti(blk + RES_RAMP_N, 0);
         set_resonator(s, BLK_TILT);
+        trf(sy, L_SCRATCH, RF(blk, RES_C));
     }
 }
 
@@ -754,6 +810,7 @@ static void voiced_source(synth *sy, int pos, int left)
 
     if (sy->first_block) {
         sy->first_block = 0;
+        tr8(sy, L_FIRST, 0);
         start_voicing(sy);
     }
     period_lengths(s, F(S_PHASE_MS));
@@ -786,6 +843,7 @@ static void voiced_source(synth *sy, int pos, int left)
         seg_add(s, I(S_CLOSED_NOW));
 
         left -= I(S_PERIOD);
+        tr32(sy, L_SCRATCH, (uint32_t)I(S_PERIOD));
         period_lengths(s, advance_phase(s));
     }
     if (left <= 0) goto nothing_pending;
@@ -821,6 +879,7 @@ static void voiced_source(synth *sy, int pos, int left)
     seg_add(s, m);
     pos += m;
     left -= m;
+    sy->ebp = (uint32_t)I(S_BUF_PTR) + 4u * (uint32_t)pos;  /* the original's pointer to the closed part */
 
     seg_next(s, 0);
     m = I(S_CLOSED_NOW) < left ? I(S_CLOSED_NOW) : left;
@@ -831,6 +890,7 @@ static void voiced_source(synth *sy, int pos, int left)
     return;
 
 nothing_pending:
+    sy->ebp = (uint32_t)pos;
     SETI(S_PEND_CLOSED, 0);
     SETI(S_PEND_OPEN, 0);
     SETI(S_PEND_DELAY, 0);
@@ -875,10 +935,12 @@ static void glottal_source(synth *sy, int n)
     }
     /* that part still goes through the previous frame's tilt filter */
     if (pos > 0) {
+        tr32(sy, L_FILTERED, (uint32_t)pos);
         resonate(BLK(BLK_TILT), buf, pos);
         filtered = pos;
     }
 
+    sy->ebp = (uint32_t)pos;
     if (left > 0) {
         if (F(S_F0) != K_ZERO && I(S_AV) != 0) {
             voiced_source(sy, pos, left);
@@ -928,6 +990,7 @@ static void synth_block(synth *sy, int n)
                 set16(s + S_ASP_SEED, (int16_t)noise(s, (uint16_t)get16(s + S_ASP_SEED)));
                 for (int i = 0; i < n; i++)
                     bset(buf, i, (float)((double)get16(s + S_NOISE + 2 * i) * sy->asp_amp + bget(buf, i)));
+                if (n > 0) tr32(sy, L_FILTERED, (uint32_t)(int32_t)get16(s + S_NOISE + 2 * (n - 1)));
             }
             resonate(BLK(BLK_POLE1), buf, I(S_NBLOCK));
             antiresonate(BLK(BLK_ZERO1), s + S_ZERO_COEF, buf, I(S_NBLOCK));
@@ -948,11 +1011,18 @@ static void synth_block(synth *sy, int n)
             if (I(S_AF) != 0) {
                 set16(s + S_FRIC_SEED, (int16_t)noise(s, (uint16_t)get16(s + S_FRIC_SEED)));
                 for (int i = 0; i < I(S_NBLOCK); i++) SETF(S_FRIC + 4 * i, (float)get16(s + S_NOISE + 2 * i));
+                if (I(S_NBLOCK) > 0)
+                    tr32(sy, L_FILTERED, (uint32_t)(int32_t)get16(s + S_NOISE + 2 * (I(S_NBLOCK) - 1)));
             }
             if (sy->frame[43] != K_ZERO && I(S_AF) != 0) {
                 float gain = F(S_BYPASS_GAIN);
+                trf(sy, L_BYPASS, gain);
                 for (int i = 0; i < n; i++)
                     bset(buf, i, (float)((double)gain * F(S_FRIC + 4 * i) + bget(buf, i)));
+            }
+            if (sy->nres > 0) {                         /* the original walks par_db[] with a pointer */
+                sy->ebp = tr_addr(sy, L_PAR_DB + 4 * sy->nres);
+                tr32(sy, L_FILTERED, sy->ebp);
             }
             for (int i = 0; i < sy->nres; i++) {
                 uint8_t *blk = BLK(BLK_PAR + i);
@@ -979,7 +1049,11 @@ static void synth_block(synth *sy, int n)
         }
     }
 
-    /* to integers, tracking the peak */
+    /* to integers, tracking the peak (the original's ebx walks the output, edi counts) */
+    if (sy->tr && I(S_NBLOCK) > 0) {
+        sy->tr->ebx = sy->ctx->state_addr + S_OUT + 4u * (uint32_t)I(S_NBLOCK);
+        sy->tr->edi = (uint32_t)I(S_NBLOCK);
+    }
     for (int i = 0; i < I(S_NBLOCK); i++) {
         int32_t v = ftol(bget(buf, i));
         SETI(S_OUT + 4 * i, v);
@@ -1012,9 +1086,15 @@ int klatt_synth(const klatt_ctx *ctx, uint8_t *s, const float frame[KLATT_FRAME_
     sy.nres = I(S_NRES);
     sy.first_block = 1;
     sy.remember_from = 1;
+    sy.tr = ctx->trace;
+    if (sy.tr) {
+        memset(sy.tr->written, 0, sizeof sy.tr->written);
+        sy.tr->blocks = 0;
+    }
 
     SETI(S_NFRAMES, I(S_NFRAMES) + 1);
     int nsamp = ftol((double)F(S_SPMS) * F(S_TIME_SCALE) * frame[0]);
+    tr32(&sy, L_NSAMP, (uint32_t)nsamp);
     SETI(S_AV, ftol(frame[2]));
     SETI(S_AH, ftol(frame[7]));
     SETI(S_AF, ftol(frame[8]));
@@ -1034,18 +1114,30 @@ int klatt_synth(const klatt_ctx *ctx, uint8_t *s, const float frame[KLATT_FRAME_
     SETI(S_NBLOCK, nsamp > MAX_BLOCK ? MAX_BLOCK : nsamp);
     if (I(S_AH) != 0)
         sy.asp_amp = (float)(db_to_lin(ctx, I(S_GAIN_ASP) + I(S_GAIN_MASTER) + I(S_AH)) * K_ASP);
+    tr8(&sy, L_FIRST, 1);
+    trf(&sy, L_ASP_AMP, sy.asp_amp);
 
     for (int left = nsamp; left > 0;) {
         int n = I(S_NBLOCK) < left ? I(S_NBLOCK) : left;
         SETI(S_NBLOCK, n);
         SETF(S_BLOCK_MS, (float)((double)(n * 1000) / F(S_SAMPLE_RATE)));
         left -= n;
+        tr32(&sy, L_FILTERED, 0);
+        tr32(&sy, L_SCRATCH, (uint32_t)(n * 1000));
+        tr32(&sy, L_LEFT, (uint32_t)left);
         if (F(S_VOICE_HOLD) < K_HOLD_ON && F(S_FRIC_HOLD) < K_HOLD_ON && I(S_PEND_DELAY) == 0 &&
             I(S_PEND_CLOSED) == 0 && I(S_PEND_OPEN) == 0) {
             for (int i = 0; i < I(S_NBLOCK); i++) SETI(S_OUT + 4 * i, 0);   /* silence */
+            if (sy.tr) {
+                sy.tr->ebx = (uint32_t)n;
+                sy.tr->ebp = 0;
+                sy.tr->edi = 0;
+            }
         } else {
             synth_block(&sy, n);
+            if (sy.tr) sy.tr->ebp = sy.ebp;
         }
+        if (sy.tr) sy.tr->blocks++;
         emit(ctx, s, I(S_NBLOCK));
     }
 

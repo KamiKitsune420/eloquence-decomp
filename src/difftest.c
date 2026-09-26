@@ -4,6 +4,7 @@
  *   build\x64\difftest.exe - "text" out.wav            (same arguments and ELOQ_* variables as eloq_run)
  *   DIFFTEST=all | none | 101311a0,10131790 ...        which ported functions to check (default all)
  *   DIFFTEST_VERBOSE=n                                 print the first n mismatches in full (default 3)
+ *   DIFFTEST_SHOW=n                                    list n differing bytes per mismatch (default 6)
  *
  * The functions checked are those of src/ported.h and, in builds with ELOQ_LIFTED, the lifted rules of
  * src/gen/lifted.h (tools/delta_lift.py).
@@ -58,7 +59,7 @@ typedef struct {
     int enabled;
     int lifted;                     /* from gen/lifted.h */
     long calls, checked, bad;
-    char first[1024];
+    char first[8192];
 } dt_fn;
 
 static dt_fn g_fns[] = {
@@ -110,6 +111,7 @@ static uint32_t *g_stamp;
 static uint32_t g_serial;
 static int g_recomp;                /* inside a recompiled reference run */
 static int g_scratch;               /* DIFFTEST_SCRATCH: compare the scratch below the entry esp too */
+static unsigned g_show = 6;         /* DIFFTEST_SHOW: how many differing bytes a report lists */
 static int g_rtrecomp;              /* DIFFTEST_RTRECOMP: the hand ports (not the lifted rules) run recompiled */
 
 static void blk_read(cpu *c, uint32_t blk, uint8_t *out)
@@ -360,7 +362,7 @@ static void dt_call(cpu *c, dt_fn *e, guest_fn port, guest_fn recomp)
     host_save(&hb);
 
     /* compare */
-    char msg[1024];
+    char msg[16384];
     int len = 0, bad = 0;
     if (a_lj != b_lj) REPORT("original %s, port %s; ", a_lj ? "longjmp" : "returned", b_lj ? "longjmp" : "returned");
     else if (a_lj && a_buf != b_buf) REPORT("longjmp to %08x vs %08x; ", a_buf, b_buf);
@@ -403,13 +405,13 @@ static void dt_call(cpu *c, dt_fn *e, guest_fn port, guest_fn recomp)
                 /* the scratch below the entry esp: compared only with DIFFTEST_SCRATCH=1 (debugging: the
                  * uninitialized bytes a later caller reads) */
                 if (!g_scratch) continue;
-                if (nd++ < 6) REPORT("[esp-%x=%08x] %02x vs %02x; ", entry - at, at, ra[k], rb[k]);
+                if (nd++ < g_show) REPORT("[esp-%x=%08x] %02x vs %02x; ", entry - at, at, ra[k], rb[k]);
                 continue;
             }
-            if (nd++ < 6) REPORT("[%08x] %02x vs %02x; ", at, ra[k], rb[k]);
+            if (nd++ < g_show) REPORT("[%08x] %02x vs %02x; ", at, ra[k], rb[k]);
         }
     }
-    if (nd > 6) REPORT("(%u bytes differ); ", nd);
+    if (nd > g_show) REPORT("(%u bytes differ); ", nd);
     if (bad) {
         e->bad++;
         g_total_bad++;
@@ -447,6 +449,7 @@ static void dt_setup(void)
     }
     g_rtrecomp = getenv("DIFFTEST_RTRECOMP") != NULL;
     g_scratch = getenv("DIFFTEST_SCRATCH") != NULL;
+    if (getenv("DIFFTEST_SHOW")) g_show = (unsigned)atol(getenv("DIFFTEST_SHOW"));
     const char *v = getenv("DIFFTEST_VERBOSE");
     if (v) g_verbose_left = atol(v);
     x86_longjmp_hook = lj_hook;

@@ -352,12 +352,35 @@ jmp_buf *x86_jmpbuf(cpu *c, uint32_t guest_buf)
     return t->e[k].host;
 }
 
+/* ELOQ_ICALLS=file: append every engine address called indirectly (once per process) - which functions
+ * are reached through pointers (callbacks, tables), for the list of what is still to port */
+static void icall_log(uint32_t target)
+{
+    static int state;                   /* 0 unknown, 1 off, 2 on */
+    static FILE *f;
+    static uint32_t seen[4096];
+    static unsigned nseen;
+    if (state == 1) return;
+    if (state == 0) {
+        const char *p = getenv("ELOQ_ICALLS");
+        f = p ? fopen(p, "a") : NULL;
+        state = f ? 2 : 1;
+        if (!f) return;
+    }
+    for (unsigned i = 0; i < nseen; i++)
+        if (seen[i] == target) return;
+    if (nseen < sizeof seen / sizeof seen[0]) seen[nseen++] = target;
+    fprintf(f, "%08x\n", target);
+    fflush(f);
+}
+
 void x86_icall(cpu *c, uint32_t target)
 {
     if (target >= X86_IMPORT_BASE && target - X86_IMPORT_BASE < x86_nimports) {
         guest_fn f = x86_imports[target - X86_IMPORT_BASE].fn;
         if (f) { f(c); return; }
     }
+    icall_log(target);
     guest_fn f = x86_lookup(target);
     if (!f && c->resolve) f = c->resolve(c, target);
     if (!f) x86_fail(c, target, "indirect call to an unknown address");

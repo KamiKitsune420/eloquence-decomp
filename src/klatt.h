@@ -18,6 +18,8 @@
  *              point to sample buffers inside the state itself, which KlattOpen (FUN_1013c980) always
  *              sets to state+0xa73 and state+0x10c3; the port uses those buffers, and if state_addr is
  *              nonzero it checks that the stored pointers agree.
+ *   trace      NULL, or where to record what the original leaves on its stack (klatt_trace): for a host
+ *              that runs the port in the original's place and wants its stack scratch exact too.
  */
 #ifndef KLATT_H
 #define KLATT_H
@@ -28,11 +30,28 @@
 #define KLATT_STATE_SIZE 0x1c00
 #define KLATT_FRAME_SIZE 64
 
+/* The original's stack frame, for a host that keeps the stack scratch exact (see klatt_guest.c). The
+ * frame is 0x100 bytes from the original's esp after its prologue (`stack`, a guest address the host
+ * sets): the saved registers at 0..0xf, its locals at 0x10..0xff. The port fills in the bytes the
+ * original leaves there (written[i] nonzero for those it wrote in this call) and, for each block it
+ * outputs, the registers the original has when it calls the output function (FUN_1013c6c0), which that
+ * function and the engine's callback save on the stack. */
+#define KLATT_FRAME_BYTES 0x100
+
+typedef struct klatt_trace {
+    uint32_t stack;                         /* in: guest address of the frame */
+    uint8_t frame[KLATT_FRAME_BYTES];       /* out */
+    uint8_t written[KLATT_FRAME_BYTES];
+    uint32_t ebx, ebp, edi;                 /* at the last output call */
+    int32_t blocks;                         /* output calls made */
+} klatt_trace;
+
 typedef struct klatt_ctx {
     const void *(*img)(void *user, uint32_t addr, size_t n);
     uint8_t (*output)(void *user, uint32_t cookie, void *samples, int32_t count);
     void *user;
     uint32_t state_addr;
+    klatt_trace *trace;
 } klatt_ctx;
 
 /* Synthesize one frame. Returns what FUN_1013caf0 returns in al: 1, or 0 if the state is not a

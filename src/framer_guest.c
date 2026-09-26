@@ -21,11 +21,16 @@
 PORT_FN(101306b0)
 {
     uint32_t entry = c->esp;
+    uint32_t ebx = c->ebx, esi = c->esi, edi = c->edi, ebp = c->ebp;
     /* the frame lives where the original has it, so that the 64 floats the synthesizer is given end with
      * the same two words (this function's return address and first argument) */
     c->esp = entry - FRAME_BYTES;
     uint32_t r = framer_build(c, entry + 4, entry - FRAME_BUF);
     c->esp = entry;
+    c->ebx = ebx;
+    c->esi = esi;
+    c->edi = edi;
+    c->ebp = ebp;
     ret(c, r, 0);
 }
 
@@ -34,14 +39,8 @@ PORT_FN(1012f8a0)
 {
     uint32_t eng = rd32(c, c->esp + 4), time_p = rd32(c, c->esp + 12), value_p = rd32(c, c->esp + 16);
     int16_t track = (int16_t)rd16(c, c->esp + 8);
-    uint32_t time = 0;
-    int32_t value = 0;
-    /* the original writes *value as soon as the first entry is read, *time only on success */
-    uint32_t q = rd32(c, rd32(c, rd32(c, eng + 0x64) + 0x21)) + (uint32_t)track * 0x18;
-    int had_entry = !framer_queue_empty(c, q);
-    int ok = framer_next_point(c, eng, track, &time, &value);
-    if (had_entry) wr32(c, value_p, (uint32_t)value);
-    if (ok) wr32(c, time_p, time);
+    uint32_t time;
+    int ok = framer_next_point(c, eng, track, time_p, value_p, &time);
     ret(c, ok ? (time & 0xffffff00u) | 1u : 0, 0);
 }
 
@@ -66,18 +65,14 @@ PORT_FN(10130bd0)
 /* bool __thiscall FUN_10130c60(queue, uint *entry) */
 PORT_FN(10130c60)
 {
-    uint32_t out = rd32(c, c->esp + 4), q = c->ecx, e;
-    uint32_t buf = rd32(c, q), head = rd16(c, q + 6);
-    int nonempty = buf != 0 && head != rd16(c, q + 8);
-    if (nonempty) wr32(c, out, rd32(c, buf + head * 4));    /* before the queue changes, as the original */
-    int r = framer_queue_pop(c, q, &e);
-    ret(c, (uint32_t)r, 4);
+    uint32_t r = framer_queue_pop(c, c->ecx, rd32(c, c->esp + 4));
+    ret(c, r, 4);
 }
 
 /* bool __fastcall FUN_10130d40(queue) */
 PORT_FN(10130d40)
 {
-    ret(c, (uint32_t)framer_queue_shrink(c, c->ecx), 0);
+    ret(c, framer_queue_shrink(c, c->ecx), 0);
 }
 
 /* bool FUN_10142350(eng): stop requested */

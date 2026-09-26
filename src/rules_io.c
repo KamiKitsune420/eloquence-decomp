@@ -492,27 +492,47 @@ static uint32_t split_at(cpu *c, uint32_t sp, uint32_t eng, uint32_t s, uint32_t
     const uint32_t sp0 = sp - 0x24;
     const uint32_t si = s & 0xff;
     uint32_t e, tok, left, right, nm;
+    /* the original's registers: ebp eng, edi s, esi s & 0xff, ebx the token next to m; left and right in its
+     * locals at sp - 0x14 and sp - 0x10 */
+    uint32_t ebx = c->ebx, esi = c->esi, edi = c->edi, ebp = c->ebp;
+    c->ebp = eng;
+    c->edi = s;
+    c->esi = si;
     if (n < 0) {
         e = fwd_link(c, m, si) & ~3u;
         tok = (e && is_mark(c, e)) ? 0 : e;
+        c->ebx = tok;
+        c->eax = e;
+        c->ecx = m;
+        wr32(c, sp - 0x14, m);
         nm = call5(c, sp0, f_10136720, 0x10136366u, eng, s, e, m, 0);
+        wr32(c, sp - 0x10, nm);
         left = m;
         right = nm;
     } else {
         e = back_link(c, RS(eng), m, si) & ~3u;
         tok = (e && is_mark(c, e)) ? 0 : e;
+        c->ebx = tok;
+        c->eax = e;
+        c->ecx = m;
+        wr32(c, sp - 0x10, m);
         nm = call5(c, sp0, f_10136720, 0x101363aau, eng, s, m, e, 0);
+        wr32(c, sp - 0x14, nm);
         left = nm;
         right = m;
     }
     wr32(c, sp + 0xc, nm);
-    if (!nm) return 0;
+    uint32_t r = 0;
+    if (!nm) goto out;
     uint32_t an = n < 0 ? 0u - (uint32_t)n : (uint32_t)n;
     uint32_t desc = stream_desc(si);
     if (tok) {
         int16_t t = (int16_t)rd16(c, rd32(c, desc + SD_FIELDS) + FD_TYPE);
         uint32_t get = rd32(c, rd32(c, desc + SD_GETTERS));
         uint32_t src = 0;
+        c->ebx = tok + 8;
+        c->ecx = rd32(c, desc + SD_GETTERS);
+        c->edx = c->ecx;
         if (t == T_SHORT) {
             uint32_t f = icall1(c, sp0, get, 0x10136416u, tok + 8);
             uint32_t v = (uint32_t)(int32_t)(int16_t)rd16(c, f) - an;
@@ -539,10 +559,20 @@ static uint32_t split_at(cpu *c, uint32_t sp, uint32_t eng, uint32_t s, uint32_t
         wr32(c, sp0 + 0x1c, sp0 + 0x18);
         wr8(c, sp0 + 0x22, 0);
     }
+    c->esi = si * 19;
+    c->eax = left;
+    c->ecx = right;
+    c->edx = sp0 + 0x1c;
     uint32_t ok = call5(c, sp0, f_10136570, 0x101364a1u, eng, s, right, left, sp0 + 0x1c) & 0xff;
     nm = rd32(c, sp + 0xc);
-    c->ecx = nm;
-    return ok ? nm : 0;
+    r = ok ? nm : 0;
+out:
+    c->ebx = ebx;
+    c->esi = esi;
+    c->edi = edi;
+    c->ebp = ebp;
+    if (nm) c->ecx = nm;                    /* the new mark also in ecx (else what the callee left) */
+    return r;
 }
 
 /* ------------------------------------------------------------------------------------------ set-up */

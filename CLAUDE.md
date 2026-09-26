@@ -47,10 +47,11 @@ python tools/difftest.py -j 4 [--quick] [--only addr,addr]   # every ported/lift
 difftest switches (details in notes/port.md): `DIFFTEST_RTRECOMP=1` (hand ports run as their originals - the
 check for lifted rules), `DIFFTEST_SCRATCH=1` (also compare the stack scratch below each function's entry esp),
 `DIFFTEST_WATCH=addr`, `DIFFTEST_WATCH_RS=1`, `DIFFTEST_CALLLOG=1` (trace who writes a byte / where two runs
-part). Useful listings: `python tools/disasm.py 0xSTART 0xEND`, `python tools/pushes.py ADDR` (stack traffic).
+part), `DIFFTEST_SHOW=n` (list n differing bytes per report). Useful listings: `python tools/disasm.py 0xSTART 0xEND`, `python tools/pushes.py ADDR` (stack traffic).
 
-Last verified state (2026-09-25): regress identical x64 + x86; RTRECOMP difftest 0 mismatches; plain difftest
-19 944 heap mismatches in 8 rules (uninitialized stack bytes from hand ports not yet exact; audio identical).
+Last verified state (2026-09-25 evening): regress identical x64 + x86 (195/195 lines, 23/23 API scripts);
+full DIFFTEST_SCRATCH run: 0 mismatches in every hand port over 203M calls; 156 015 remain in 41 lifted
+rules, all stack scratch (the lifter does not reproduce every dead stack byte; nothing reads them).
 
 ## How the code fits together
 
@@ -67,14 +68,16 @@ Last verified state (2026-09-25): regress identical x64 + x86; RTRECOMP difftest
 
 ## Current work (see notes/port.md for the full state)
 
-1. **Hand ports' scratch made exact** (in progress, ~105 of 180 exact): the recipe is in notes/port.md
-   ("The hand ports' scratch made exact"). Loop: `$env:DIFFTEST_SCRATCH="1"; python tools/difftest.py --quick
-   --only <functions>`, fix callees before callers, relink the difftest build (~1-2 min), recheck, then run
-   regress. Next: backtrack 101311a0, match_string 10132c40, synthesizer 1013caf0, start_span 101340f0, the
-   pool, the edit functions.
-2. **Rules rewritten by hand** (user's choice: readable C over the same memory; not started): each lifted rule
-   rewritten into src/rules/*.c, proven with `DIFFTEST_RTRECOMP=1 --only <rule>` before it replaces the lifted
-   one. 993 rules, batches per session.
+1. **Hand ports' scratch made exact**: done - every hand port leaves the original's stack bytes (recipe and
+   the synthesizer/frame builder details in notes/port.md). Any new or changed hand port must keep
+   `DIFFTEST_SCRATCH=1` clean.
+2. **The whole engine hand-written** (user's decision 2026-09-25 evening): no recompiled or lifted code may
+   remain - the 993 lifted rules (~225k Ghidra lines) and ~310 still-recompiled functions (list:
+   build/remaining_real.txt; indirect-only targets: `ELOQ_ICALLS=file` logs them) all become hand-written C.
+   Exactness contract chosen by the user: **output-exact, clean C** - audio and ECI API identical, engine
+   memory identical except bytes the original leaves uninitialized (masked in the tester; any that reach the
+   output are reproduced deliberately and documented). No return addresses / register echoes in new code;
+   at the end the software x86 and all generated code are deleted.
 
 ## Environment gotchas
 

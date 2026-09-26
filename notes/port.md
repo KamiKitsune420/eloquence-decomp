@@ -232,7 +232,7 @@ written value on the next line, WROTE); DIFFTEST_WATCH_RS=1 watches the rule cur
 checked call; DIFFTEST_CALLLOG=1 logs every hand-ported function's call inside a check on both sides
 (address, return address, two arguments, eax) - diff the orig and port lines to find where they part.
 
-### The hand ports' scratch made exact (in progress, started 2026-09-25)
+### The hand ports' scratch made exact (done 2026-09-25)
 
 The rules copy uninitialized stack bytes into the heap, so a hand port must leave below its entry esp the
 bytes its original leaves. DIFFTEST_SCRATCH=1 makes difftest compare that scratch too (reported as
@@ -249,27 +249,56 @@ machine code with tools/pushes.py, tools/disasm.py: pushes, calls, their esp):
    the callee's adapter then writes its own frame;
 4. around those calls the machine's registers hold the original's values (callees save them: `esi = eng`
    and the like, from the listing), restored before returning (the caller's contract).
-Status 2026-09-25 15:00: ~100 of 180 checked hand ports exact (rule frames, cursor goto, sync-variable
-moves, the comparison predicates, push/pop value, trail, ref_at, mark_here, touch, set_token, token_init,
-next_token/step adapters); the quick scratch run went from 4.58M differing checked calls to ~1.3M, and the
-full plain difftest's heap mismatches from 28 418 (19 rules) to 19 944 (8 rules). By 15:30 also exact:
-assign 10133250, set_short 101325e0, compare 10132be0 / 10134280 / 10132350, rl_assign 10138730 (aligned
-frame: prologues.py handles `and esp, -8`; _ftol return addresses and the fild local written) and
-rl_compare 10138920 (rl_compare_sp / rl_assign_sp: the sp-aware versions the adapters use; direct C callers
-pass sp 0 = no stack writes). The full plain difftest still shows 19 944 heap mismatches in 8 rules
-(10031caf, 10031865, 1001ba74, 1001b98d, 100211f4, 1001af8d, 1001feec, 1001ff9b): their garbage comes from
-ports not yet exact - trace with DIFFTEST_WATCH on the stack byte (see the 10031caf analysis above).
-Next: backtrack 101311a0, match_string 10132c40, the synthesizer 1013caf0, start_span 101340f0, the pool
-(10138d60 jumps into 10139c60), the edit functions. Every call now made through the machine is also checked nested, so difftest runs slower.
+5. a hand port written as a whole C module (klatt.c, framer.c) runs its frame where the original has it and
+   records the locals the original leaves (their final values; later code reads nothing else), and the
+   registers the original holds where it calls out (the engine's callbacks save them).
+DIFFTEST_SHOW=n lists n differing bytes per report (default 6).
 
-### The rules rewritten by hand (planned, user's choice 2026-09-25)
+Status (evening 2026-09-25): every hand port leaves the original's stack scratch. The last ones:
+- split_at 10136320: registers ebp = eng, edi = s, esi = s & 0xff, ebx = the token next to m; left/right
+  in its locals at sp-0x14/-0x10; the final call with esi = 19 * (s & 0xff). (This also made the insert_list
+  and get_sv residuals exact: their garbage came from split_at's frame.)
+- the frame builder 101306b0 (framer.c): its calls through the machine where the original makes them - the
+  stop check 10142350 (ret 0x101308c7), the track accessors 1012f960 / 1012f980 (the calloc count's call
+  made with the size already pushed), the next breakpoint 1012f8a0 with ebx = eng, esi = the segment,
+  edi = the track, ebp = the cursor; its locals (step as a qword, the interpolation's dt/dv/v0/x, t, the
+  slot/track loop pointers, the failure flag, the last frame's length); at the synthesizer call ebx = eng,
+  esi = t (or t - end + step for the frame past the end: the original reuses esi), edi = t + step,
+  ebp = end.
+- the queue functions: 1012f8a0 calls 10130bd0 / 10130c60 on the machine (entry in its local at esp+8,
+  bl = 1, esi = the queue); 10130c60 tail-calls 10130d40 from its entry esp; 10130d40 makes the C-runtime
+  calls below its three (four, while unwrapping a ring) saves. Its eax: (capacity & 0xff00) | 1, or the new
+  buffer | 1, or 0 - visible now that the calls go through the machine.
+- the synthesizer 1013caf0 (klatt.c + klatt_guest.c): klatt.c fills an optional klatt_trace (NULL for other
+  hosts): its frame's final bytes - freq[k] at +0x8c + 4k, bw[k] at +0x38 + 4k, par_db at +0xe0 (the same
+  arrays as its synth struct), nsamp +0x2c, remember_from +0x28, the aspiration gain +0x24, first_block
+  (byte) +0x1f, the block's remaining samples +0x30, the parallel loop's k +0x20 and sign +0x14, the x87
+  scratch +0x10 (n * 1000, then the pitch period in samples, the tilt C, each whole period's length), +0x18
+  (the samples filtered first, then the last noise sample, then a pointer to par_db[nres]), the bypass gain
+  +0x34; and at each output the registers ebx (the output pointer after the int loop, or n for a silent
+  block), edi (n, or 0), ebp (0 for silence; &par_db[nres] after the parallel branch; else the glottal
+  source's position, or the buffer pointer to the closed part after a partial period). klatt_guest.c writes
+  the frame, saves edi at +0, and makes FUN_1013c6c0's frame (count, state, return 0x1013e83f, edi; with
+  output on ebx, esi, {count, samples}) and calls the engine's callback from it (ret 0x1013c728) with ebx,
+  ebp, esi = edi = state. Not covered: frames with no samples (nsamp <= 0 leaves the ftol/div calls'
+  scratch, which the port does not write), and with output off the bytes below FUN_1013c6c0's frame that
+  the filters' calls leave (with it on, the callback's frame covers them) -
+  neither is exercised by the tests.
 
-"Readable C, same memory": each lifted rule (src/gen/rules_lifted_*.c, generated) is rewritten by hand into
-src/rules/*.c as clear C over the same guest memory - named variables and streams, what the rule matches and
-emits in plain words, the runtime called by name, the register mirroring kept where callees see it - and
-proved bit-exact per rule with difftest (DIFFTEST_RTRECOMP=1 --only <rule>) before it replaces the lifted
-one (a hand-written rule is listed instead of the lifted one; delta_lift then skips it). 993 rules, 255k
-lines lifted: batches per session, largest-called first.
+### The whole engine hand-written (user's decision, evening 2026-09-25)
+
+Replaces the earlier "rules rewritten by hand, same memory" plan. Everything still machine-derived becomes
+hand-written C: the 993 lifted rules (median 123, max 6021 Ghidra lines; 225 568 in all) and the functions
+still recompiled - 287 direct call targets (~17k Ghidra lines, build/remaining_real.txt; 1012b..10143: the
+engine interface, callbacks, sentence processing, audio/synth management, CRT helpers; 10120212 is 3290
+lines alone) plus the ones reached only through pointers (ELOQ_ICALLS=file logs indirect targets: ~38 stubs
+at 10128d89..10128fcc, the callbacks 1012d480..1012de00, 1012ef80, 1012f2b0, 1012f560, CRT 10142d40 /
+10142e49). The other ~310 entries x2c emits are Ghidra's fake mid-instruction entries (never run).
+
+Contract (user's choice): output-exact, clean C. Audio and the ECI API stay sample-identical; the engine's
+memory stays identical except bytes the original leaves uninitialized (the tester masks them; any that do
+reach the output are reproduced deliberately and documented). New code carries no return addresses or
+register echoes. The end state deletes the software x86, x2c and the lifter from the build.
 
 ## Plan
 

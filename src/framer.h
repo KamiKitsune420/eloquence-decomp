@@ -26,14 +26,15 @@
 uint32_t framer_build(cpu *c, uint32_t args, uint32_t frame);
 
 /* The parameter tracks' queues. `eng` is the engine instance (the frame builder's first argument), `q` the
- * guest address of one track's queue. */
+ * guest address of one track's queue. The ones that call others (next_point, pop, shrink) run as the
+ * original at its entry (c->esp holds the return address) and make their calls on the machine. */
 int32_t framer_track_count(cpu *c, uint32_t eng);                    /* FUN_1012f980 */
 uint32_t framer_track_end(cpu *c, uint32_t eng, int16_t track);      /* FUN_1012f960 */
-int framer_next_point(cpu *c, uint32_t eng, int16_t track, uint32_t *time, int32_t *value);
+int framer_next_point(cpu *c, uint32_t eng, int16_t track, uint32_t time_p, uint32_t value_p, uint32_t *time);
                                                                      /* FUN_1012f8a0: 1, or 0 if none */
 int framer_queue_empty(cpu *c, uint32_t q);                          /* FUN_10130bd0 */
-int framer_queue_pop(cpu *c, uint32_t q, uint32_t *entry);           /* FUN_10130c60: 1, or 0 if empty */
-int framer_queue_shrink(cpu *c, uint32_t q);                         /* FUN_10130d40: 0 if realloc failed */
+uint32_t framer_queue_pop(cpu *c, uint32_t q, uint32_t out);         /* FUN_10130c60: eax, al 0 if empty */
+uint32_t framer_queue_shrink(cpu *c, uint32_t q);                    /* FUN_10130d40: eax, al 0 if realloc failed */
 int framer_stop_requested(cpu *c, uint32_t eng);                     /* FUN_10142350 */
 
 #endif
